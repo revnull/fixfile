@@ -205,7 +205,7 @@ data WT s
     transaction.
 -}
 newtype Transaction (f :: * -> *) s a = Transaction {
-    runT :: RWS.RWST (FFH f) () (Stored s f) IO a
+    runT :: RWS.RWST (FFH f) (Last Pos) (Stored s f) IO a
   }
 
 instance Functor (Transaction f s) where
@@ -217,9 +217,10 @@ instance Applicative (Transaction f s) where
 
 instance Monad (Transaction f s) where
     return = pure
-    Transaction t >>= f = Transaction $ RWS.RWST $ \ffh hdr -> do
-        (a, hdr', _) <- RWS.runRWST t ffh hdr
-        RWS.runRWST (runT $ f a) ffh hdr'
+    Transaction t >>= f = Transaction $ RWS.RWST $ \ffh root -> do
+        (a, root', w) <- RWS.runRWST t ffh root
+        (a', root'', w') <- RWS.runRWST (runT $ f a) ffh root'
+        return (a', root'', w `mappend` w')
 
 withHandle :: (FFH f -> IO a) -> Transaction f s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
@@ -266,7 +267,7 @@ lookupT f = f <$> getRoot
     A 'FixFile' is a handle for accessing a file-backed recursive data
     structure. 'f' is the 'Functor' that the file is storing.
 -}
-data FixFile (f :: * -> *) = FixFile FilePath (MVar (FFH f)) (MVar ())
+data FixFile (f :: * -> *) = FixFile FilePath (MVar (FFH f, Pos)) (MVar ())
 
 acquireWriteLock :: FixFile f -> IO ()
 acquireWriteLock (FixFile _ _ wl) = do
@@ -281,20 +282,20 @@ withWriteLock ff f = do
     acquireWriteLock ff
     f `finally` releaseWriteLock ff
 
-readHeader :: (Traversable f, Binary (f Pos)) => FFH f -> IO (Stored s f)
-readHeader ffh = do
-    p <- withFFH ffh $ \h _ -> do
-        hSeek h AbsoluteSeek 0
-        decode <$> BSL.hGet h 8
-    readStoredLazy ffh p
+readHeader :: FFH f -> IO (Pos)
+readHeader ffh = withFFH ffh $ \h _ -> do
+    hSeek h AbsoluteSeek 0
+    decode <$> BSL.hGet h 8
 
 updateHeader :: (Functor f, Binary (f Pos)) => Pos -> 
     Transaction f (WT s) ()
-updateHeader p = withHandle $ \ffh -> 
-    withFFH ffh $ \h _ -> do
-        hSeek h AbsoluteSeek 0
-        BSL.hPut h (encode p)
-        hFlush h
+updateHeader p = do
+    withHandle $ \ffh -> 
+        withFFH ffh $ \h _ -> do
+            hSeek h AbsoluteSeek 0
+            BSL.hPut h (encode p)
+            hFlush h
+    Transaction . RWS.tell . pure $ p
 
 {- |
     Create a 'FixFile', using @'Fix' f@ as the initial structure to store
@@ -317,10 +318,11 @@ createFixFileHandle init path h = do
     ffh <- FFH <$> newMVar (h, c)
     BSL.hPut h (encode (0 :: Pos))
     let t = runT $ do
-            let hdr = iso init
-            sync hdr >>= updateHeader
-    RWS.runRWST t ffh undefined
-    ffhmv <- newMVar ffh
+            let root = iso init
+            sync root >>= updateHeader
+    (_,_,hdr') <- RWS.runRWST t ffh undefined
+    let Just hdr = getLast hdr'
+    ffhmv <- newMVar (ffh, hdr)
     FixFile path ffhmv <$> newMVar ()
 
 {- |
@@ -339,7 +341,8 @@ openFixFileHandle path h = do
     h <- openFile path ReadWriteMode
     c <- createCache
     ffh <- FFH <$> newMVar (h, c)
-    ffhmv <- newMVar ffh
+    hdr <- readHeader ffh
+    ffhmv <- newMVar (ffh, hdr)
     FixFile path ffhmv <$> newMVar ()
 
 {- |
@@ -351,9 +354,9 @@ openFixFileHandle path h = do
 readTransaction :: (Traversable f, Binary (f Pos)) => FixFile f ->
     (forall s. Transaction f (RT s) a) -> IO a
 readTransaction (FixFile _ ffhmv _) t = do
-    ffh <- readMVar ffhmv
-    hdr <- readHeader ffh
-    (a, _) <- RWS.evalRWST (runT t) ffh hdr
+    (ffh, hdr) <- readMVar ffhmv
+    root <- readStoredLazy ffh hdr
+    (a, _) <- RWS.evalRWST (runT t) ffh root
     return a
 
 {- |
@@ -366,14 +369,19 @@ writeTransaction :: (Binary (f Pos), Traversable f)
     -> IO a
 writeTransaction ff@(FixFile _ ffhmv _) t = withWriteLock ff runTransaction where
     runTransaction = do
-        ffh <- readMVar ffhmv
+        (ffh, hdr) <- readMVar ffhmv
         let t' = t >>= save
             save res = do
-                hdr <- getRoot
-                sync hdr >>= updateHeader
+                root' <- getRoot
+                sync root' >>= updateHeader
                 return res
-        hdr <- readHeader ffh
-        fst <$> RWS.evalRWST (runT t') ffh hdr
+        root <- readStoredLazy ffh hdr
+        (a, hdr') <- RWS.evalRWST (runT t') ffh root
+        System.IO.putStrLn $ show hdr'
+        case getLast hdr' of
+            Nothing -> return ()
+            Just hdr'' -> void $ swapMVar ffhmv (ffh, hdr'')
+        return a
 
 {- |
     Get the full datastructure from the transaction as a @'Fix' f@.
@@ -393,9 +401,9 @@ getFull = iso <$> getRoot
 vacuum :: (Traversable f, Binary (f Pos)) => FixFile f -> IO ()
 vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
     runVacuum = do
-        ffh <- takeMVar mv
+        mval <- takeMVar mv
 
-        readFFHMV <- newMVar ffh
+        readFFHMV <- newMVar mval
         readDB <- FixFile path readFFHMV <$> newMVar ()
 
         (tp, th) <- openTempFile (takeDirectory path) ".ffile.tmp"
