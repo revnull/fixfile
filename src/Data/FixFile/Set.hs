@@ -1,4 +1,5 @@
-{-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
+    DeriveDataTypeable #-}
 
 {- |
     Module      :  Data.FixFile.Set
@@ -31,6 +32,7 @@ module Data.FixFile.Set (Set
 import Data.FixFile
 import Data.FixFile.Fixed
 import Data.Binary
+import Data.Dynamic
 import Data.Foldable hiding (concat, toList)
 import Data.Traversable
 import GHC.Generics
@@ -41,7 +43,7 @@ import Control.Applicative hiding (empty)
     A 'Fixed' @('Set' i)@ is a set of items represented as a binary tree.
 -}
 data Set i a = Empty | Node a i a
-    deriving (Read, Show, Generic, Functor, Foldable, Traversable)
+    deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
 instance (Binary i, Binary a) => Binary (Set i a)
 
@@ -95,7 +97,7 @@ lookupSetT :: (Ord i, Binary i) => i -> Transaction (Set i) s Bool
 lookupSetT i = lookupT (lookupSet i)
 
 -- | Create a @'FixFile' ('Set' i)@.
-createSetFile :: Binary i => FilePath -> IO (FixFile (Set i))
+createSetFile :: (Binary i, Typeable i) => FilePath -> IO (FixFile (Set i))
 createSetFile fp = createFixFile empty fp
 
 -- | Open a @'FixFile' ('Set' i)@.

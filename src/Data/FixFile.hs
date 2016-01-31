@@ -1,6 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables, RankNTypes, KindSignatures,
     MultiParamTypeClasses, FlexibleInstances, FlexibleContexts,
-    FunctionalDependencies, TypeFamilies, UndecidableInstances #-}
+    FunctionalDependencies, TypeFamilies, UndecidableInstances,
+    DeriveDataTypeable #-}
 
 {-|
     
@@ -78,15 +79,24 @@ import Control.Exception
 import Control.Monad.Identity hiding (mapM)
 import Data.IORef
 import Data.HashTable.IO
+import qualified Data.Map as M
 import System.IO.Temp
 import System.FilePath
 import System.Directory
+import Data.Dynamic
+import Data.Proxy
+import Data.Maybe
 
 import Data.FixFile.Fixed
 
 type HashTable k v = CuckooHashTable k v
 
 data Cache f = Cache Int (HashTable Pos (f Pos)) (HashTable Pos (f Pos))
+    deriving (Typeable)
+
+type Caches = MVar (M.Map TypeRep Dynamic)
+
+createCaches = newMVar M.empty
 
 createCache :: IO (Cache f)
 createCache = Cache 0 <$> new <*> new
@@ -99,8 +109,8 @@ cacheInsert p f (Cache i oc nc) =
             insert nc p f
             return (Cache (i + 1) oc nc)
 
-getCachedOrStored :: Pos -> Cache f -> IO (f Pos) -> IO (Cache f, f Pos)
-getCachedOrStored p c@(Cache i oc nc) m = do
+getCachedOrStored :: Pos -> IO (f Pos) -> Cache f -> IO (Cache f, f Pos)
+getCachedOrStored p m c@(Cache i oc nc) = do
     nval <- lookup nc p
     val <- maybe (lookup oc p) (return . Just) nval
     case (nval, val) of
@@ -113,30 +123,36 @@ getCachedOrStored p c@(Cache i oc nc) m = do
             return (c', f)
         (Just f, _) -> return (c, f)
 
+withCache :: Typeable f => Caches -> (Cache f -> IO (Cache f, a)) -> IO a
+withCache cs f = modifyMVar cs $ \cm -> do
+    let tr = typeOf (fromJust mc)
+        mc = M.lookup tr cm >>= fromDynamic
+    c <- maybe createCache return mc
+    (c', a) <- f c
+    return (M.insert (typeOf c) (toDyn c) cm, a)
+
+withCache_ :: Typeable f => Caches -> (Cache f -> IO (Cache f)) -> IO ()
+withCache_ cs f = withCache cs $ \c -> f c >>= \c' -> return (c', ())
+
 -- | A Position in a file.
 type Pos = Word64
 
 -- FFH is a FixFile Handle. This is an internal data structure.
-newtype FFH f = FFH (MVar (Handle, Cache f))
+newtype FFH = FFH (MVar (Handle, Caches))
 
-withFFH :: FFH f -> (Handle -> Cache f -> IO a) -> IO a
+withFFH :: FFH -> (Handle -> Caches -> IO a) -> IO a
 withFFH (FFH mv) f = withMVar mv $ \(h, c) -> f h c
 
-modifyFFH :: MonadIO m => 
-    FFH f -> (Handle -> Cache f -> IO (Cache f, a)) -> m a
-modifyFFH (FFH mv) fn = liftIO $ modifyMVar mv $ \(h, c) -> do
-    (c', a) <- fn h c
-    return ((h, c'), a)
-
-getBlock :: (MonadIO m, Binary (f Pos)) => Pos -> FFH f -> m (f Pos)
-getBlock p ffh = modifyFFH ffh readFromFile where
-    readFromFile h c = getCachedOrStored p c $ do
+getBlock :: (Typeable f,  Binary (f Pos)) => Pos -> FFH -> IO (f Pos)
+getBlock p ffh = withFFH ffh readCached where
+    readCached h cs = withCache cs (getCachedOrStored p $ readFromFile h)
+    readFromFile h = do
         hSeek h AbsoluteSeek (fromIntegral p)
         (sb :: Word32) <- decode <$> (BSL.hGet h 4)
         decode <$> BSL.hGet h (fromIntegral sb)
 
-putBlock :: (MonadIO m, Binary (f Pos)) => f Pos -> FFH f -> m Pos
-putBlock a ffh = liftIO $ modifyFFH ffh $ \h c -> do
+putBlock :: (Typeable f, Binary (f Pos)) => f Pos -> FFH -> IO Pos
+putBlock a ffh = withFFH ffh $ \h cs -> do
     hSeek h SeekFromEnd 0
     p <- fromIntegral <$> hTell h
     let enc  = encode a
@@ -144,8 +160,8 @@ putBlock a ffh = liftIO $ modifyFFH ffh $ \h c -> do
         len' = encode (len :: Word32)
         enc' = mappend len' enc
     BSL.hPut h enc'
-    c' <- cacheInsert p a c
-    return (c', p)
+    withCache_ cs (cacheInsert p a)
+    return p
 
 -- | A 'Stored\'' is a fixpoint combinator for data that is potentially
 -- | file-backed.
@@ -184,7 +200,7 @@ storedPos' _ = error "Improper sync of data structure."
 
 -- | Write the stored data to disk so that the on-disk representation 
 --   matches what is in memory.
-sync :: (Traversable f, Binary (f Pos)) =>
+sync :: (Typeable f, Traversable f, Binary (f Pos)) =>
     Stored s f -> Transaction f s Pos
 sync = commit . outS where
     commit (Memory r) = do
@@ -205,7 +221,7 @@ data WT s
     transaction.
 -}
 newtype Transaction (f :: * -> *) s a = Transaction {
-    runT :: RWS.RWST (FFH f) (Last Pos) (Stored s f) IO a
+    runT :: RWS.RWST FFH (Last Pos) (Stored s f) IO a
   }
 
 instance Functor (Transaction f s) where
@@ -222,7 +238,7 @@ instance Monad (Transaction f s) where
         (a', root'', w') <- RWS.runRWST (runT $ f a) ffh root'
         return (a', root'', w `mappend` w')
 
-withHandle :: (FFH f -> IO a) -> Transaction f s a
+withHandle :: (FFH -> IO a) -> Transaction f s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
 
 -- | Get the root object stored in the file.
@@ -237,8 +253,8 @@ putRoot = Transaction . RWS.put
 liftIO' :: IO a -> Transaction f s a
 liftIO' = Transaction . liftIO
 
-readStoredLazy :: (Traversable f, Binary (f Pos)) =>
-    FFH f -> Pos -> IO (Stored s f)
+readStoredLazy :: (Typeable f, Traversable f, Binary (f Pos)) =>
+    FFH -> Pos -> IO (Stored s f)
 readStoredLazy h p = do
     f <- getBlock p h
     let cons = InS . Cached p
@@ -267,7 +283,7 @@ lookupT f = f <$> getRoot
     A 'FixFile' is a handle for accessing a file-backed recursive data
     structure. 'f' is the 'Functor' that the file is storing.
 -}
-data FixFile (f :: * -> *) = FixFile FilePath (MVar (FFH f, Pos)) (MVar ())
+data FixFile (f :: * -> *) = FixFile FilePath (MVar (FFH, Pos)) (MVar ())
 
 acquireWriteLock :: FixFile f -> IO ()
 acquireWriteLock (FixFile _ _ wl) = do
@@ -282,7 +298,7 @@ withWriteLock ff f = do
     acquireWriteLock ff
     f `finally` releaseWriteLock ff
 
-readHeader :: FFH f -> IO (Pos)
+readHeader :: FFH -> IO (Pos)
 readHeader ffh = withFFH ffh $ \h _ -> do
     hSeek h AbsoluteSeek 0
     decode <$> BSL.hGet h 8
@@ -301,8 +317,8 @@ updateHeader p = do
     Create a 'FixFile', using @'Fix' f@ as the initial structure to store
     at the location described by 'FilePath'.
 -}
-createFixFile :: (Traversable f, Binary (f Pos)) => Fix f -> FilePath ->
-    IO (FixFile f)
+createFixFile :: (Typeable f, Traversable f, Binary (f Pos)) =>
+    Fix f -> FilePath -> IO (FixFile f)
 createFixFile init path =
     openFile path ReadWriteMode >>= createFixFileHandle init path
 
@@ -311,10 +327,10 @@ createFixFile init path =
     at the location described by 'FilePath' and using the 'Handle' to the
     file to be created.
 -}
-createFixFileHandle :: (Traversable f, Binary (f Pos)) => Fix f -> FilePath ->
-    Handle -> IO (FixFile f)
+createFixFileHandle :: (Typeable f, Traversable f, Binary (f Pos)) =>
+    Fix f -> FilePath -> Handle -> IO (FixFile f)
 createFixFileHandle init path h = do
-    c <- createCache
+    c <- createCaches
     ffh <- FFH <$> newMVar (h, c)
     BSL.hPut h (encode (0 :: Pos))
     let t = runT $ do
@@ -339,7 +355,7 @@ openFixFile path =
 openFixFileHandle :: FilePath -> Handle -> IO (FixFile f)
 openFixFileHandle path h = do
     h <- openFile path ReadWriteMode
-    c <- createCache
+    c <- createCaches
     ffh <- FFH <$> newMVar (h, c)
     hdr <- readHeader ffh
     ffhmv <- newMVar (ffh, hdr)
@@ -351,7 +367,7 @@ openFixFileHandle path h = do
     evaluated, but will always correspond to the root object at the start
     of the transaction.
 -}
-readTransaction :: (Traversable f, Binary (f Pos)) => FixFile f ->
+readTransaction :: (Typeable f, Traversable f, Binary (f Pos)) => FixFile f ->
     (forall s. Transaction f (RT s) a) -> IO a
 readTransaction (FixFile _ ffhmv _) t = do
     (ffh, hdr) <- readMVar ffhmv
@@ -364,7 +380,7 @@ readTransaction (FixFile _ ffhmv _) t = do
     the readTransaction in that the root object stored in the file can
     potentially be updated by this 'Transaction'.
 -}
-writeTransaction :: (Binary (f Pos), Traversable f)
+writeTransaction :: (Binary (f Pos), Traversable f, Typeable f)
     => FixFile f -> (forall s. Transaction f (WT s) a)
     -> IO a
 writeTransaction ff@(FixFile _ ffhmv _) t = withWriteLock ff runTransaction where
@@ -377,7 +393,6 @@ writeTransaction ff@(FixFile _ ffhmv _) t = withWriteLock ff runTransaction wher
                 return res
         root <- readStoredLazy ffh hdr
         (a, hdr') <- RWS.evalRWST (runT t') ffh root
-        System.IO.putStrLn $ show hdr'
         case getLast hdr' of
             Nothing -> return ()
             Just hdr'' -> void $ swapMVar ffhmv (ffh, hdr'')
@@ -398,13 +413,14 @@ getFull = iso <$> getRoot
     The memory usage of this operation scales with the recursive depth of the
     full structure stored in the file.
 -}
-vacuum :: (Traversable f, Binary (f Pos)) => FixFile f -> IO ()
+vacuum :: (Typeable f, Traversable f, Binary (f Pos)) => FixFile f -> IO ()
 vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
     runVacuum = do
         mval <- takeMVar mv
 
         readFFHMV <- newMVar mval
         readDB <- FixFile path readFFHMV <$> newMVar ()
+        let readDB' = readDB `asTypeOf` ff
 
         (tp, th) <- openTempFile (takeDirectory path) ".ffile.tmp"
         hClose th

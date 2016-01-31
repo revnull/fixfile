@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
-    KindSignatures, TypeFamilies, FlexibleInstances, FlexibleContexts #-}
+    KindSignatures, TypeFamilies, FlexibleInstances, FlexibleContexts,
+    DeriveDataTypeable #-}
 
 {- |
     Module      :  Data.FixFile.Tree23
@@ -48,6 +49,7 @@ module Data.FixFile.Tree23 (Tree23
                            ,valuesMap
                            ) where
 
+import Data.Dynamic
 import Data.FixFile
 import Data.FixFile.Fixed
 import qualified Data.Foldable as F
@@ -62,7 +64,8 @@ data Tree23F k v a =
   | Leaf k v
   | Two a k a
   | Three a k a k a
-  deriving (Read, Show, Eq, Ord, Generic, Functor, F.Foldable, Traversable)
+  deriving (Read, Show, Eq, Ord, Generic, Functor, F.Foldable, Traversable,
+            Typeable)
 
 {- |
     'Fixed' @('TreeD' d)@ represents a Two-Three tree. The data type 'd' should
@@ -116,10 +119,10 @@ size = cata phi where
 data Set k
 
 newtype instance TreeKey (Set k) = SK k
-    deriving (Read, Show, Eq, Ord, Generic)
+    deriving (Read, Show, Eq, Ord, Generic, Typeable)
 
 data instance TreeValue (Set k) = SV
-    deriving (Read, Show, Eq, Ord, Generic)
+    deriving (Read, Show, Eq, Ord, Generic, Typeable)
 
 instance Binary k => Binary (TreeKey (Set k))
 
@@ -150,7 +153,8 @@ fromListSet :: (Fixed g, Ord k) => [k] -> Tree23 g (Set k)
 fromListSet = Prelude.foldr insertSet empty
 
 -- | Create a 'FixFile' for storing a set of items.
-createSetFile :: Binary k => FilePath -> IO (FixFile (TreeD (Set k)))
+createSetFile :: (Binary k, Typeable k) =>
+    FilePath -> IO (FixFile (TreeD (Set k)))
 createSetFile fp = createFixFile empty fp
 
 -- | Open a 'FixFile' for storing a set of items.
@@ -173,10 +177,10 @@ deleteSetT k = alterT (deleteSet k)
 data Map k v
 
 newtype instance TreeKey (Map k v) = MK k
-    deriving (Read, Show, Eq, Ord, Generic)
+    deriving (Read, Show, Eq, Ord, Generic, Typeable)
 
 newtype instance TreeValue (Map k v) = MV { fromMV :: v }
-    deriving (Read, Show, Eq, Ord, Generic)
+    deriving (Read, Show, Eq, Ord, Generic, Typeable)
 
 instance Binary k => Binary (TreeKey (Map k v))
 
@@ -234,7 +238,7 @@ mapMap f = cata phi where
     phi (Three l (MK k1) m (MK k2) r) = three l (MK k1) m (MK k2) r
 
 -- | Create a 'FixFile' of a Map.
-createMapFile :: (Binary k, Binary v) => FilePath ->
+createMapFile :: (Binary k, Typeable k, Binary v, Typeable v) => FilePath ->
     IO (FixFile (TreeD (Map k v)))
 createMapFile fp = createFixFile empty fp
 

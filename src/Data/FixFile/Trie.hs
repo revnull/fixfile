@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
-    TypeFamilies #-}
+    TypeFamilies, DeriveDataTypeable #-}
 
 {- |
     Module      :  Data.FixFile.Trie
@@ -30,6 +30,7 @@ module Data.FixFile.Trie (Trie
 
 import Prelude hiding (tail)
 
+import Data.Dynamic
 import Data.FixFile
 import Data.FixFile.Fixed
 import Data.Foldable hiding (concat)
@@ -131,7 +132,7 @@ thaw (Small a b) = Mutable a $ M.fromList b
 thaw m = m
 
 -- | Create a 'FixFile' of @('Trie' v)@ data.
-createTrieFile :: Binary v => FilePath -> IO (FixFile (Trie v))
+createTrieFile :: (Binary v, Typeable v) => FilePath -> IO (FixFile (Trie v))
 createTrieFile fp = createFixFile empty fp
 
 -- | Open a 'FixFile' of @('Trie' v)@ data.

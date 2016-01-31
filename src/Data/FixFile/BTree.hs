@@ -1,4 +1,5 @@
-{-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
+{-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
+    DeriveDataTypeable #-}
 
 {- |
     Module      :  Data.FixFile.BTree
@@ -35,6 +36,7 @@ import Data.Foldable hiding (concat, foldr)
 import Data.Traversable
 import GHC.Generics
 import Data.Array
+import Data.Dynamic
 
 {- |
     A 'Fixed' @('BTree' k v)@ stores a BTree of key/value pairs.
@@ -43,7 +45,7 @@ data BTree k v a =
     Empty
   | Value v
   | Node Word32 (Array Int (k, a))
-    deriving (Read, Show, Generic, Functor, Foldable, Traversable)
+    deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
 instance (Binary k, Binary v, Binary a) => Binary (BTree k v a)
 
@@ -59,7 +61,8 @@ node d = inf . Node d
 
 -- | Create a 'FixFile' storing a @('BTree' k v)@.
 --   The initial value is 'empty'.
-createBTreeFile :: (Binary k, Binary v) => FilePath -> IO (FixFile (BTree k v))
+createBTreeFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
+    FilePath -> IO (FixFile (BTree k v))
 createBTreeFile fp = createFixFile empty fp
 
 -- | Open a 'FixFile' storing a @('BTree' k v)@.
