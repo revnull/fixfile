@@ -154,11 +154,12 @@ fromListSet = Prelude.foldr insertSet empty
 
 -- | Create a 'FixFile' for storing a set of items.
 createSetFile :: (Binary k, Typeable k) =>
-    FilePath -> IO (FixFile (TreeD (Set k)))
-createSetFile fp = createFixFile empty fp
+    FilePath -> IO (FixFile (Ref (TreeD (Set k))))
+createSetFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' for storing a set of items.
-openSetFile :: Binary k => FilePath -> IO (FixFile (TreeD (Set k)))
+openSetFile :: (Binary k, Typeable k) =>
+    FilePath ->IO (FixFile (Ref (TreeD (Set k))))
 openSetFile fp = openFixFile fp
 
 -- | 'Transaction' version of 'insertSet'.
@@ -238,13 +239,13 @@ mapMap f = cata phi where
     phi (Three l (MK k1) m (MK k2) r) = three l (MK k1) m (MK k2) r
 
 -- | Create a 'FixFile' of a Map.
-createMapFile :: (Binary k, Typeable k, Binary v, Typeable v) => FilePath ->
-    IO (FixFile (TreeD (Map k v)))
-createMapFile fp = createFixFile empty fp
+createMapFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
+    FilePath -> IO (FixFile (Ref (TreeD (Map k v))))
+createMapFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' of a Map.
-openMapFile :: (Binary k, Binary v) => FilePath ->
-    IO (FixFile (TreeD (Map k v)))
+openMapFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
+    FilePath -> IO (FixFile (Ref (TreeD (Map k v))))
 openMapFile fp = openFixFile fp
 
 -- | 'Transaction' version of 'insertMap'.

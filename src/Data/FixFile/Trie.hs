@@ -54,7 +54,7 @@ data Trie v a =
   | Small (Maybe a) [(Word8, a)]
   | Big (Maybe a) (Array Word8 (Maybe a))
   | Mutable (Maybe a) (M.Map Word8 a)
-  deriving (Read, Show, Generic, Functor, Foldable, Traversable)
+  deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
 instance (Binary v, Binary a) => Binary (Trie v a) where
     put (Value v) = putWord8 0 >> put v
@@ -132,11 +132,13 @@ thaw (Small a b) = Mutable a $ M.fromList b
 thaw m = m
 
 -- | Create a 'FixFile' of @('Trie' v)@ data.
-createTrieFile :: (Binary v, Typeable v) => FilePath -> IO (FixFile (Trie v))
-createTrieFile fp = createFixFile empty fp
+createTrieFile :: (Binary v, Typeable v) =>
+    FilePath -> IO (FixFile (Ref (Trie v)))
+createTrieFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' of @('Trie' v)@ data.
-openTrieFile :: Binary v => FilePath -> IO (FixFile (Trie v))
+openTrieFile :: (Binary v, Typeable v) =>
+    FilePath -> IO (FixFile (Ref (Trie v)))
 openTrieFile = openFixFile
 
 -- | Lookup a possible value stored in a trie for a given 'ByteString' key.

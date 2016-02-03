@@ -29,6 +29,7 @@ module Data.FixFile.Set (Set
                          ,toListSetT
                          ) where
 
+import Data.Dynamic
 import Data.FixFile
 import Data.FixFile.Fixed
 import Data.Binary
@@ -97,11 +98,13 @@ lookupSetT :: (Ord i, Binary i) => i -> Transaction (Set i) s Bool
 lookupSetT i = lookupT (lookupSet i)
 
 -- | Create a @'FixFile' ('Set' i)@.
-createSetFile :: (Binary i, Typeable i) => FilePath -> IO (FixFile (Set i))
-createSetFile fp = createFixFile empty fp
+createSetFile :: (Binary i, Typeable i) =>
+    FilePath -> IO (FixFile (Ref (Set i)))
+createSetFile fp = createFixFile (Ref empty) fp
 
 -- | Open a @'FixFile' ('Set' i)@.
-openSetFile :: Binary i => FilePath -> IO (FixFile (Set i))
+openSetFile :: (Binary i, Typeable i) =>
+    FilePath -> IO (FixFile (Ref (Set i)))
 openSetFile = openFixFile
 
 -- | Turn a 'Fixed' recurive structure of @'Set' i@ into a list.

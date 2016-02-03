@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables, RankNTypes, KindSignatures,
     MultiParamTypeClasses, FlexibleInstances, FlexibleContexts,
     FunctionalDependencies, TypeFamilies, UndecidableInstances,
-    DeriveDataTypeable #-}
+    DeriveDataTypeable, DeriveGeneric #-}
 
 {-|
     
@@ -39,6 +39,13 @@ module Data.FixFile (
                      ,ParaAlg
                      ,para
                      ,iso
+                     -- * Root Data
+                     ,Root(..)
+                     ,Ptr
+                     ,Ref(..)
+                     ,ref
+                     ,Tup(..)
+                     ,tup
                      -- * FixFiles
                      ,FixFile
                      ,createFixFile
@@ -48,26 +55,34 @@ module Data.FixFile (
                      ,vacuum
                      -- * Transactions
                      ,Transaction
+                     ,RootTransaction
                      ,RT
                      ,WT
                      ,alterT
                      ,lookupT
                      ,readTransaction
                      ,writeTransaction
+                     ,subTransaction
                      ,getRoot
                      ,putRoot
                      ,getFull
                      ) where
 
 import Prelude hiding (sequence, mapM, lookup)
+
+import Control.Lens hiding (iso, para)
 import Data.Word
 import Data.Binary
 import Data.Binary.Get
 import Data.Binary.Put
+import Data.Dynamic
+import qualified Data.Map as M
+import Data.Maybe
 import Data.Monoid
 import Data.Foldable
 import Data.Traversable
 
+import GHC.Generics
 import Control.Monad.Trans
 import System.IO
 import System.IO.Unsafe
@@ -91,17 +106,18 @@ import Data.FixFile.Fixed
 
 type HashTable k v = CuckooHashTable k v
 
-data Cache f = Cache Int (HashTable Pos (f Pos)) (HashTable Pos (f Pos))
+data Cache a = Cache Int (HashTable Pos a) (HashTable Pos a)
     deriving (Typeable)
 
 type Caches = MVar (M.Map TypeRep Dynamic)
 
-createCaches = newMVar M.empty
-
 createCache :: IO (Cache f)
 createCache = Cache 0 <$> new <*> new
 
-cacheInsert :: Pos -> f Pos -> Cache f -> IO (Cache f)
+createCaches :: IO Caches
+createCaches = newMVar M.empty
+
+cacheInsert :: Pos -> a -> Cache a -> IO (Cache a)
 cacheInsert p f (Cache i oc nc) =
     if i >= 50
         then new >>= cacheInsert p f . Cache 0 nc
@@ -109,7 +125,7 @@ cacheInsert p f (Cache i oc nc) =
             insert nc p f
             return (Cache (i + 1) oc nc)
 
-getCachedOrStored :: Pos -> IO (f Pos) -> Cache f -> IO (Cache f, f Pos)
+getCachedOrStored :: Pos -> IO a -> Cache a -> IO (Cache a, a)
 getCachedOrStored p m c@(Cache i oc nc) = do
     nval <- lookup nc p
     val <- maybe (lookup oc p) (return . Just) nval
@@ -123,15 +139,15 @@ getCachedOrStored p m c@(Cache i oc nc) = do
             return (c', f)
         (Just f, _) -> return (c, f)
 
-withCache :: Typeable f => Caches -> (Cache f -> IO (Cache f, a)) -> IO a
-withCache cs f = modifyMVar cs $ \cm -> do
-    let tr = typeOf (fromJust mc)
-        mc = M.lookup tr cm >>= fromDynamic
+withCache :: Typeable c => Caches -> (Cache c -> IO (Cache c, a)) -> IO a
+withCache cs f = modifyMVar cs $ \cmap -> do
+    let mc = M.lookup mt cmap >>= fromDynamic
+        mt = typeOf $ fromJust mc
     c <- maybe createCache return mc
     (c', a) <- f c
-    return (M.insert (typeOf c) (toDyn c) cm, a)
+    return (M.insert mt (toDyn c') cmap, a)
 
-withCache_ :: Typeable f => Caches -> (Cache f -> IO (Cache f)) -> IO ()
+withCache_ :: Typeable c => Caches -> (Cache c -> IO (Cache c)) -> IO ()
 withCache_ cs f = withCache cs $ \c -> f c >>= \c' -> return (c', ())
 
 -- | A Position in a file.
@@ -143,15 +159,17 @@ newtype FFH = FFH (MVar (Handle, Caches))
 withFFH :: FFH -> (Handle -> Caches -> IO a) -> IO a
 withFFH (FFH mv) f = withMVar mv $ \(h, c) -> f h c
 
-getBlock :: (Typeable f,  Binary (f Pos)) => Pos -> FFH -> IO (f Pos)
-getBlock p ffh = withFFH ffh readCached where
-    readCached h cs = withCache cs (getCachedOrStored p $ readFromFile h)
-    readFromFile h = do
-        hSeek h AbsoluteSeek (fromIntegral p)
-        (sb :: Word32) <- decode <$> (BSL.hGet h 4)
-        decode <$> BSL.hGet h (fromIntegral sb)
+getRawBlock :: Binary a => Handle -> Pos -> IO a
+getRawBlock h p = do
+    hSeek h AbsoluteSeek (fromIntegral p)
+    (sb :: Word32) <- decode <$> (BSL.hGet h 4)
+    decode <$> BSL.hGet h (fromIntegral sb)
 
-putBlock :: (Typeable f, Binary (f Pos)) => f Pos -> FFH -> IO Pos
+getBlock :: (Typeable f, Binary (f Pos)) => Pos -> FFH -> IO (f Pos)
+getBlock p ffh = withFFH ffh readFromFile where
+    readFromFile h cs = withCache cs $ (getCachedOrStored p $ getRawBlock h p)
+
+putBlock :: (Typeable a, Binary a) => a -> FFH -> IO Pos
 putBlock a ffh = withFFH ffh $ \h cs -> do
     hSeek h SeekFromEnd 0
     p <- fromIntegral <$> hTell h
@@ -198,6 +216,14 @@ storedPos' :: Stored s f -> Pos
 storedPos' (InS (Cached p _)) = p
 storedPos' _ = error "Improper sync of data structure."
 
+sync' :: (Traversable f, Binary (f Pos), Typeable f) =>
+    FFH -> Stored s f -> IO Pos
+sync' h = commit . outS where
+    commit (Memory r) = do
+        r' <- mapM (sync' h) r
+        putBlock r' h
+    commit (Cached p _) = return p
+
 -- | Write the stored data to disk so that the on-disk representation 
 --   matches what is in memory.
 sync :: (Typeable f, Traversable f, Binary (f Pos)) =>
@@ -205,7 +231,7 @@ sync :: (Typeable f, Traversable f, Binary (f Pos)) =>
 sync = commit . outS where
     commit (Memory r) = do
         r' <- mapM sync r
-        withHandle $ putBlock r'
+        withHandle' $ putBlock r'
     commit (Cached p _) = return p
 
 -- | 'RT' is a read transaction of 's'
@@ -221,7 +247,7 @@ data WT s
     transaction.
 -}
 newtype Transaction (f :: * -> *) s a = Transaction {
-    runT :: RWS.RWST FFH (Last Pos) (Stored s f) IO a
+    runT :: RWS.RWST FFH () (Stored s f) IO a
   }
 
 instance Functor (Transaction f s) where
@@ -238,22 +264,106 @@ instance Monad (Transaction f s) where
         (a', root'', w') <- RWS.runRWST (runT $ f a) ffh root'
         return (a', root'', w `mappend` w')
 
-withHandle :: (FFH -> IO a) -> Transaction f s a
-withHandle f = Transaction $ RWS.ask >>= liftIO . f
+newtype Ptr (f :: * -> *) = Ptr { unPtr :: Pos } 
+    deriving Generic
+
+instance Binary (Ptr f)
+
+class Root (r :: (((* -> *) -> *) -> *)) where
+    readRoot :: r Ptr -> RootTransaction r' s (r (Stored s))
+    writeRoot :: r (Stored (WT s)) -> RootTransaction r' (WT s) (r Ptr)
+    fromMemRep :: r Fix -> r (Stored s)
+    toMemRep :: r (Stored s) -> r Fix
+
+data Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
+    deriving (Generic)
+
+instance (Typeable f, Binary (f Pos), Traversable f) => Root (Ref f) where
+    readRoot (Ref (Ptr p)) = Ref <$> (withHandle $ flip readStoredLazy p)
+    writeRoot (Ref a) = (Ref . Ptr) <$> (withHandle $ flip sync' a)
+    fromMemRep (Ref a) = Ref . iso $ a
+    toMemRep (Ref a) = Ref . iso $ a
+
+instance Binary (Ref f Ptr)
+
+ref :: Lens' (Ref f g) (g f)
+ref = lens (\(Ref a) -> a) (\_ b -> Ref b)
+
+newtype Tup r1 r2 (g :: (* -> *) -> *) = Tup { unTup :: (r1 g, r2 g) }
+
+instance (Root r1, Root r2) => Root (Tup r1 r2) where
+    readRoot (Tup (p1, p2)) = do
+        r1 <- readRoot p1
+        r2 <- readRoot p2
+        return $ Tup (r1, r2)
+    writeRoot (Tup (r1, r2)) = do
+        p1 <- writeRoot r1
+        p2 <- writeRoot r2
+        return $ Tup (p1, p2)
+    fromMemRep (Tup (m1, m2)) = Tup (fromMemRep m1, fromMemRep m2)
+    toMemRep (Tup (r1, r2)) = Tup (toMemRep r1, toMemRep r2)
+
+tup :: Lens' (Tup r1 r2 g) (r1 g, r2 g)
+tup = lens (\(Tup t) -> t) (\_ t -> Tup t)
+
+newtype RootTransaction r s a = RTransaction {
+    runRT :: RWS.RWST FFH (Last (r Ptr)) (r (Stored s)) IO a
+  }
+
+instance Functor (RootTransaction f s) where
+    fmap f (RTransaction t) = RTransaction $ fmap f t
+
+instance Applicative (RootTransaction f s) where
+    pure = RTransaction . pure
+    RTransaction a <*> RTransaction b = RTransaction $ a <*> b
+
+instance Monad (RootTransaction f s) where
+    return = pure
+    RTransaction t >>= f = RTransaction $ RWS.RWST $ \ffh root -> do
+        (a, root', w) <- RWS.runRWST t ffh root
+        (a', root'', w') <- RWS.runRWST (runRT $ f a) ffh root'
+        return (a', root'', w `mappend` w')
+
+subRoot :: Lens' (r (Stored s)) (r' (Stored s)) -> RootTransaction r' s a ->
+    RootTransaction r s a
+subRoot l st = RTransaction $ RWS.RWST $ \ffh root -> do
+    (a, r, _) <- RWS.runRWST (runRT st) ffh (root^.l)
+    return (a, set l r root, mempty)
+
+subTransaction :: Lens' (r (Stored s)) (Stored s f) -> Transaction f s a ->
+    RootTransaction r s a
+subTransaction l st = RTransaction $ RWS.RWST $ \ffh root -> do
+    (a, r, _) <- RWS.runRWST (runT st) ffh (root^.l)
+    return (a, set l r root, mempty)
+
+withHandle' :: (FFH -> IO a) -> Transaction f s a
+withHandle' f = Transaction $ RWS.ask >>= liftIO . f
+
+withHandle :: (FFH -> IO a) -> RootTransaction r s a
+withHandle f = RTransaction $ RWS.ask >>= liftIO . f
 
 -- | Get the root object stored in the file.
-getRoot :: Transaction f s (Stored s f)
-getRoot = Transaction $ RWS.get
+getRoot :: RootTransaction r s (r (Stored s))
+getRoot = RTransaction $ RWS.get
+
+getFixed :: Transaction f s (Stored s f)
+getFixed = Transaction $ RWS.get
 
 -- | Update the root object of the file. This only takes effect at the
 --   end of the tranaction.
-putRoot :: Stored (WT s) f -> Transaction f (WT s) ()
-putRoot = Transaction . RWS.put
+putRoot :: Root r => r (Stored (WT s)) -> RootTransaction r (WT s) ()
+putRoot =  putRoot'
+
+putRoot' :: Root r => r (Stored s) -> RootTransaction r s ()
+putRoot' = RTransaction . RWS.put
+
+putFixed :: Stored (WT s) f -> Transaction f (WT s) ()
+putFixed = Transaction . RWS.put
 
 liftIO' :: IO a -> Transaction f s a
 liftIO' = Transaction . liftIO
 
-readStoredLazy :: (Typeable f, Traversable f, Binary (f Pos)) =>
+readStoredLazy :: (Traversable f, Binary (f Pos), Typeable f) =>
     FFH -> Pos -> IO (Stored s f)
 readStoredLazy h p = do
     f <- getBlock p h
@@ -268,7 +378,7 @@ readStoredLazy h p = do
 -}
 alterT :: (tr ~ Transaction f (WT s), Traversable f, Binary (f Pos)) =>
     (Stored (WT s) f -> Stored (WT s) f) -> tr ()
-alterT f = getRoot >>= putRoot . f
+alterT f = getFixed >>= putFixed . f
 
 {- |
     The preferred way to read from a 'FixFile' is to use 'lookupT'. It
@@ -276,14 +386,14 @@ alterT f = getRoot >>= putRoot . f
 -}
 lookupT :: (tr ~ Transaction f s, Traversable f, Binary (f Pos)) =>
     (Stored s f -> a) -> tr a
-lookupT f = f <$> getRoot
+lookupT f = f <$> getFixed
 
 
 {- |
     A 'FixFile' is a handle for accessing a file-backed recursive data
     structure. 'f' is the 'Functor' that the file is storing.
 -}
-data FixFile (f :: * -> *) = FixFile FilePath (MVar (FFH, Pos)) (MVar ())
+data FixFile r = FixFile FilePath (MVar (FFH, r Ptr)) (MVar ())
 
 acquireWriteLock :: FixFile f -> IO ()
 acquireWriteLock (FixFile _ _ wl) = do
@@ -303,22 +413,20 @@ readHeader ffh = withFFH ffh $ \h _ -> do
     hSeek h AbsoluteSeek 0
     decode <$> BSL.hGet h 8
 
-updateHeader :: (Functor f, Binary (f Pos)) => Pos -> 
-    Transaction f (WT s) ()
+updateHeader :: Pos -> RootTransaction r (WT s) ()
 updateHeader p = do
     withHandle $ \ffh -> 
         withFFH ffh $ \h _ -> do
             hSeek h AbsoluteSeek 0
             BSL.hPut h (encode p)
             hFlush h
-    Transaction . RWS.tell . pure $ p
 
 {- |
     Create a 'FixFile', using @'Fix' f@ as the initial structure to store
     at the location described by 'FilePath'.
 -}
-createFixFile :: (Typeable f, Traversable f, Binary (f Pos)) =>
-    Fix f -> FilePath -> IO (FixFile f)
+createFixFile :: (Root r, Binary (r Ptr), Typeable r) =>
+    r Fix -> FilePath -> IO (FixFile r)
 createFixFile init path =
     openFile path ReadWriteMode >>= createFixFileHandle init path
 
@@ -327,24 +435,25 @@ createFixFile init path =
     at the location described by 'FilePath' and using the 'Handle' to the
     file to be created.
 -}
-createFixFileHandle :: (Typeable f, Traversable f, Binary (f Pos)) =>
-    Fix f -> FilePath -> Handle -> IO (FixFile f)
+createFixFileHandle :: (Root r, Binary (r Ptr), Typeable r) =>
+    r Fix -> FilePath -> Handle -> IO (FixFile r)
 createFixFileHandle init path h = do
     c <- createCaches
     ffh <- FFH <$> newMVar (h, c)
     BSL.hPut h (encode (0 :: Pos))
-    let t = runT $ do
-            let root = iso init
-            sync root >>= updateHeader
-    (_,_,hdr') <- RWS.runRWST t ffh undefined
-    let Just hdr = getLast hdr'
-    ffhmv <- newMVar (ffh, hdr)
+    let t = runRT $ do
+            dr <- writeRoot $ fromMemRep init
+            (withHandle $ putBlock dr) >>= updateHeader
+            RTransaction . RWS.tell . Last . Just $ dr
+    (_,_,root') <- RWS.runRWST t ffh undefined
+    let Just root = getLast root'
+    ffhmv <- newMVar (ffh, root)
     FixFile path ffhmv <$> newMVar ()
 
 {- |
     Open a 'FixFile' from the file described by 'FilePath'.
 -}
-openFixFile :: FilePath -> IO (FixFile f)
+openFixFile :: Binary (r Ptr) => FilePath -> IO (FixFile r)
 openFixFile path =
     openFile path ReadWriteMode >>= openFixFileHandle path
 
@@ -352,13 +461,13 @@ openFixFile path =
     Open a 'FixFile' from the file described by 'FilePath' and using the
     'Handle' to the file.
 -}
-openFixFileHandle :: FilePath -> Handle -> IO (FixFile f)
+openFixFileHandle :: Binary (r Ptr) => FilePath -> Handle ->
+    IO (FixFile r)
 openFixFileHandle path h = do
-    h <- openFile path ReadWriteMode
     c <- createCaches
     ffh <- FFH <$> newMVar (h, c)
-    hdr <- readHeader ffh
-    ffhmv <- newMVar (ffh, hdr)
+    root <- readHeader ffh >>= getRawBlock h 
+    ffhmv <- newMVar (ffh, root)
     FixFile path ffhmv <$> newMVar ()
 
 {- |
@@ -367,12 +476,12 @@ openFixFileHandle path h = do
     evaluated, but will always correspond to the root object at the start
     of the transaction.
 -}
-readTransaction :: (Typeable f, Traversable f, Binary (f Pos)) => FixFile f ->
-    (forall s. Transaction f (RT s) a) -> IO a
+readTransaction :: Root r => FixFile r ->
+    (forall s. RootTransaction r (RT s) a) -> IO a
 readTransaction (FixFile _ ffhmv _) t = do
-    (ffh, hdr) <- readMVar ffhmv
-    root <- readStoredLazy ffh hdr
-    (a, _) <- RWS.evalRWST (runT t) ffh root
+    (ffh, root) <- readMVar ffhmv
+    let t' = readRoot root >>= putRoot' >> t
+    (a, _) <- RWS.evalRWST (runRT t') ffh undefined
     return a
 
 {- |
@@ -380,29 +489,31 @@ readTransaction (FixFile _ ffhmv _) t = do
     the readTransaction in that the root object stored in the file can
     potentially be updated by this 'Transaction'.
 -}
-writeTransaction :: (Binary (f Pos), Traversable f, Typeable f)
-    => FixFile f -> (forall s. Transaction f (WT s) a)
+writeTransaction :: (Root r, Binary (r Ptr), Typeable r) => 
+    FixFile r -> (forall s. RootTransaction r (WT s) a)
     -> IO a
-writeTransaction ff@(FixFile _ ffhmv _) t = withWriteLock ff runTransaction where
+writeTransaction ff@(FixFile _ ffhmv _) t = res where
+    res = withWriteLock ff runTransaction
     runTransaction = do
-        (ffh, hdr) <- readMVar ffhmv
-        let t' = t >>= save
+        (ffh, root) <- readMVar ffhmv
+        let t' = readRoot root >>= putRoot >> t >>= save
             save res = do
-                root' <- getRoot
-                sync root' >>= updateHeader
+                dr <- getRoot >>= writeRoot
+                (withHandle $ putBlock dr) >>= updateHeader
+                RTransaction . RWS.tell . Last . Just $ dr
                 return res
-        root <- readStoredLazy ffh hdr
-        (a, hdr') <- RWS.evalRWST (runT t') ffh root
-        case getLast hdr' of
+        (a, root') <- RWS.evalRWST (runRT t') ffh undefined
+        case getLast root' of
             Nothing -> return ()
-            Just hdr'' -> void $ swapMVar ffhmv (ffh, hdr'')
+            Just root'' -> do
+                void $ swapMVar ffhmv (ffh, root'')
         return a
 
 {- |
     Get the full datastructure from the transaction as a @'Fix' f@.
 -}
 getFull :: (Traversable f, Binary (f Pos)) => Transaction f s (Fix f)
-getFull = iso <$> getRoot
+getFull = iso <$> getFixed
 
 {- |
     Because a 'FixFile' is backed by an append-only file, there is a periodic
@@ -413,7 +524,8 @@ getFull = iso <$> getRoot
     The memory usage of this operation scales with the recursive depth of the
     full structure stored in the file.
 -}
-vacuum :: (Typeable f, Traversable f, Binary (f Pos)) => FixFile f -> IO ()
+vacuum :: (Root r, Binary (r Ptr), Typeable r) =>
+    FixFile r -> IO ()
 vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
     runVacuum = do
         mval <- takeMVar mv
@@ -425,8 +537,8 @@ vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
         (tp, th) <- openTempFile (takeDirectory path) ".ffile.tmp"
         hClose th
 
-        (FixFile _ newMV _) <- readTransaction readDB getFull >>=
-            flip createFixFile tp
+        rootMem <- readTransaction readDB (toMemRep <$> getRoot)
+        (FixFile _ newMV _) <- createFixFile rootMem tp
 
         renameFile tp path
 

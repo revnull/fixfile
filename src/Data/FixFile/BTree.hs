@@ -29,6 +29,7 @@ module Data.FixFile.BTree (BTree
                           ,fromListBTree
                           ) where
 
+import Data.Dynamic
 import Data.FixFile.Fixed
 import Data.FixFile
 import Data.Binary
@@ -62,11 +63,12 @@ node d = inf . Node d
 -- | Create a 'FixFile' storing a @('BTree' k v)@.
 --   The initial value is 'empty'.
 createBTreeFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
-    FilePath -> IO (FixFile (BTree k v))
-createBTreeFile fp = createFixFile empty fp
+    FilePath -> IO (FixFile (Ref (BTree k v)))
+createBTreeFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' storing a @('BTree' k v)@.
-openBTreeFile :: (Binary k, Binary v) => FilePath -> IO (FixFile (BTree k v))
+openBTreeFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
+    FilePath -> IO (FixFile (Ref (BTree k v)))
 openBTreeFile = openFixFile
 
 nodeSize :: Integral i => i
