@@ -29,17 +29,13 @@ module Data.FixFile.Set (Set
                          ,toListSetT
                          ) where
 
-import Data.Dynamic
-import Data.FixFile
-import Data.FixFile.Fixed
+import Prelude hiding (lookup)
+
 import Data.Binary
 import Data.Dynamic
-import Data.Foldable hiding (concat, toList)
-import Data.Traversable
 import GHC.Generics
-import Prelude hiding (lookup)
-import Control.Applicative hiding (empty)
 
+import Data.FixFile
 {- |
     A 'Fixed' @('Set' i)@ is a set of items represented as a binary tree.
 -}

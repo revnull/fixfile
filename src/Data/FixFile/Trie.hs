@@ -30,20 +30,17 @@ module Data.FixFile.Trie (Trie
 
 import Prelude hiding (tail)
 
-import Data.Dynamic
-import Data.FixFile
-import Data.FixFile.Fixed
-import Data.Foldable hiding (concat)
-import Data.Traversable
-import Data.Array
-import qualified Data.ByteString.Lazy as BS
-import Data.Word
-import Data.Binary
-import GHC.Generics
 import Control.Applicative hiding (empty)
 import Control.Monad
-import Data.Maybe
+import Data.Array
+import Data.Binary
+import qualified Data.ByteString.Lazy as BS
+import Data.Dynamic
 import qualified Data.Map as M
+import Data.Maybe
+import GHC.Generics
+
+import Data.FixFile
 
 -- | 'Fixed' @('Trie' v)@ is a trie mapping lazy 'ByteString's to values of
 --   type v.

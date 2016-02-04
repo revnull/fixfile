@@ -49,22 +49,21 @@ module Data.FixFile.Tree23 (Tree23
                            ,valuesMap
                            ) where
 
-import Data.Dynamic
-import Data.FixFile
-import Data.FixFile.Fixed
-import qualified Data.Foldable as F
-import Data.Traversable
-import Data.Binary
-import GHC.Generics
-import Data.Maybe
 import Prelude hiding (null)
+
+import Data.Dynamic
+import Data.Binary
+import Data.Maybe
+import GHC.Generics
  
+import Data.FixFile
+
 data Tree23F k v a = 
     Empty
   | Leaf k v
   | Two a k a
   | Three a k a k a
-  deriving (Read, Show, Eq, Ord, Generic, Functor, F.Foldable, Traversable,
+  deriving (Read, Show, Eq, Ord, Generic, Functor, Foldable, Traversable,
             Typeable)
 
 {- |

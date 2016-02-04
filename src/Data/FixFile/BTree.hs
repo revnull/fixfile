@@ -29,15 +29,12 @@ module Data.FixFile.BTree (BTree
                           ,fromListBTree
                           ) where
 
-import Data.Dynamic
-import Data.FixFile.Fixed
-import Data.FixFile
-import Data.Binary
-import Data.Foldable hiding (concat, foldr)
-import Data.Traversable
-import GHC.Generics
 import Data.Array
+import Data.Binary
 import Data.Dynamic
+import GHC.Generics
+
+import Data.FixFile
 
 {- |
     A 'Fixed' @('BTree' k v)@ stores a BTree of key/value pairs.

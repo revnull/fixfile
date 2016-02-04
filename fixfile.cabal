@@ -35,6 +35,7 @@ library
                        ,Data.FixFile.Tree23
                        ,Data.FixFile.Trie
   other-modules:        Data.FixFile.Fixed
+  ghc-options:          -Wall
 
 Test-Suite test-fixfile
   hs-source-dirs:       tests 

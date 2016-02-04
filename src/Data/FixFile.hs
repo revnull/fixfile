@@ -63,6 +63,7 @@ module Data.FixFile (
                      ,readTransaction
                      ,writeTransaction
                      ,subTransaction
+                     ,subRoot
                      ,getRoot
                      ,putRoot
                      ,getFull
@@ -70,37 +71,25 @@ module Data.FixFile (
 
 import Prelude hiding (sequence, mapM, lookup)
 
+import Control.Concurrent.MVar
+import Control.Exception
 import Control.Lens hiding (iso, para)
-import Data.Word
+import qualified Control.Monad.RWS as RWS
+import Control.Monad.Identity hiding (mapM)
+import Control.Monad.Trans
 import Data.Binary
-import Data.Binary.Get
-import Data.Binary.Put
+import Data.ByteString.Lazy as BSL
 import Data.Dynamic
+import Data.HashTable.IO
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
-import Data.Foldable
-import Data.Traversable
-
+import Data.Traversable (mapM)
 import GHC.Generics
-import Control.Monad.Trans
-import System.IO
-import System.IO.Unsafe
-import Data.ByteString.Lazy as BSL
-import Control.Applicative
-import qualified Control.Monad.RWS as RWS
-import Control.Concurrent.MVar
-import Control.Exception
-import Control.Monad.Identity hiding (mapM)
-import Data.IORef
-import Data.HashTable.IO
-import qualified Data.Map as M
-import System.IO.Temp
 import System.FilePath
 import System.Directory
-import Data.Dynamic
-import Data.Proxy
-import Data.Maybe
+import System.IO
+import System.IO.Unsafe
 
 import Data.FixFile.Fixed
 
@@ -123,7 +112,7 @@ cacheInsert p f (Cache i oc nc) =
             return (Cache (i + 1) oc nc)
 
 cacheLookup :: Pos -> Cache a -> IO (Cache a, Maybe a)
-cacheLookup p c@(Cache i oc nc) = do
+cacheLookup p c@(Cache _ oc nc) = do
     nval <- lookup nc p
     val <- maybe (lookup oc p) (return . Just) nval
     case (nval, val) of
@@ -199,7 +188,7 @@ instance Functor Stored' where
 
 instance Foldable Stored' where
     foldMap f (Memory a) = f a
-    foldMap f (Cached p a) = f a
+    foldMap f (Cached _ a) = f a
 
 instance Traversable Stored' where
     traverse f (Memory a) = Memory <$> f a
@@ -214,10 +203,6 @@ instance Fixed (Stored s) where
     inf = InS . Memory
     outf (InS (Memory a)) = a
     outf (InS (Cached _ a)) = a
-
-storedPos' :: Stored s f -> Pos
-storedPos' (InS (Cached p _)) = p
-storedPos' _ = error "Improper sync of data structure."
 
 -- | Write the stored data to disk so that the on-disk representation 
 --   matches what is in memory.
@@ -259,7 +244,7 @@ instance Monad (Transaction f s) where
         (a', root'', w') <- RWS.runRWST (runT $ f a) ffh root'
         return (a', root'', w `mappend` w')
 
-newtype Ptr (f :: * -> *) = Ptr { unPtr :: Pos } 
+newtype Ptr (f :: * -> *) = Ptr Pos
     deriving Generic
 
 instance Binary (Ptr f)
@@ -331,9 +316,6 @@ subTransaction l st = RTransaction $ RWS.RWST $ \ffh root -> do
     (a, r, _) <- RWS.runRWST (runT st) ffh (root^.l)
     return (a, set l r root, mempty)
 
-withHandle' :: (FFH -> IO a) -> Transaction f s a
-withHandle' f = Transaction $ RWS.ask >>= liftIO . f
-
 withHandle :: (FFH -> IO a) -> RootTransaction r s a
 withHandle f = RTransaction $ RWS.ask >>= liftIO . f
 
@@ -355,15 +337,12 @@ putRoot' = RTransaction . RWS.put
 putFixed :: Stored (WT s) f -> Transaction f (WT s) ()
 putFixed = Transaction . RWS.put
 
-liftIO' :: IO a -> Transaction f s a
-liftIO' = Transaction . liftIO
-
 readStoredLazy :: (Traversable f, Binary (f Pos), Typeable f) =>
     FFH -> Pos -> IO (Stored s f)
 readStoredLazy h p = do
     f <- getBlock p h
-    let cons = InS . Cached p
-    cons <$> mapM (unsafeInterleaveIO . readStoredLazy h) f
+    let fcons = InS . Cached p
+    fcons <$> mapM (unsafeInterleaveIO . readStoredLazy h) f
 
 {- |
     The preferred way to modify the root object of a 'FixFile' is by using
@@ -422,8 +401,8 @@ updateHeader p = do
 -}
 createFixFile :: (Root r, Binary (r Ptr), Typeable r) =>
     r Fix -> FilePath -> IO (FixFile r)
-createFixFile init path =
-    openFile path ReadWriteMode >>= createFixFileHandle init path
+createFixFile initial path =
+    openFile path ReadWriteMode >>= createFixFileHandle initial path
 
 {- |
     Create a 'FixFile', using @'Fix' f@ as the initial structure to store
@@ -432,12 +411,11 @@ createFixFile init path =
 -}
 createFixFileHandle :: (Root r, Binary (r Ptr), Typeable r) =>
     r Fix -> FilePath -> Handle -> IO (FixFile r)
-createFixFileHandle init path h = do
-    c <- newMVar M.empty
+createFixFileHandle initial path h = do
     ffh <- FFH <$> newMVar h <*> newMVar M.empty
     BSL.hPut h (encode (0 :: Pos))
     let t = runRT $ do
-            dr <- writeRoot $ fromMemRep init
+            dr <- writeRoot $ fromMemRep initial
             (withHandle $ putBlock dr) >>= updateHeader
             RTransaction . RWS.tell . Last . Just $ dr
     (_,_,root') <- RWS.runRWST t ffh undefined
@@ -459,7 +437,6 @@ openFixFile path =
 openFixFileHandle :: Binary (r Ptr) => FilePath -> Handle ->
     IO (FixFile r)
 openFixFileHandle path h = do
-    c <- newMVar M.empty
     ffh <- FFH <$> newMVar h <*> newMVar M.empty
     root <- readHeader ffh >>= getRawBlock h 
     ffhmv <- newMVar (ffh, root)
@@ -492,11 +469,11 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
     runTransaction = do
         (ffh, root) <- readMVar ffhmv
         let t' = readRoot root >>= putRoot >> t >>= save
-            save res = do
+            save a = do
                 dr <- getRoot >>= writeRoot
                 (withHandle $ putBlock dr) >>= updateHeader
                 RTransaction . RWS.tell . Last . Just $ dr
-                return res
+                return a
         (a, root') <- RWS.evalRWST (runRT t') ffh undefined
         case getLast root' of
             Nothing -> return ()
@@ -527,7 +504,6 @@ vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
 
         readFFHMV <- newMVar mval
         readDB <- FixFile path readFFHMV <$> newMVar ()
-        let readDB' = readDB `asTypeOf` ff
 
         (tp, th) <- openTempFile (takeDirectory path) ".ffile.tmp"
         hClose th
