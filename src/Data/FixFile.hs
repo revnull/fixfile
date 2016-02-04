@@ -109,13 +109,10 @@ type HashTable k v = CuckooHashTable k v
 data Cache a = Cache Int (HashTable Pos a) (HashTable Pos a)
     deriving (Typeable)
 
-type Caches = MVar (M.Map TypeRep Dynamic)
+type Caches = M.Map TypeRep Dynamic
 
 createCache :: IO (Cache f)
 createCache = Cache 0 <$> new <*> new
-
-createCaches :: IO Caches
-createCaches = newMVar M.empty
 
 cacheInsert :: Pos -> a -> Cache a -> IO (Cache a)
 cacheInsert p f (Cache i oc nc) =
@@ -125,21 +122,27 @@ cacheInsert p f (Cache i oc nc) =
             insert nc p f
             return (Cache (i + 1) oc nc)
 
-getCachedOrStored :: Pos -> IO a -> Cache a -> IO (Cache a, a)
-getCachedOrStored p m c@(Cache i oc nc) = do
+cacheLookup :: Pos -> Cache a -> IO (Cache a, Maybe a)
+cacheLookup p c@(Cache i oc nc) = do
     nval <- lookup nc p
     val <- maybe (lookup oc p) (return . Just) nval
     case (nval, val) of
-        (Nothing, Nothing) -> do
-            f <- m
-            c' <- cacheInsert p f c
-            return (c', f)
-        (Nothing, Just f) -> do
-            c' <- cacheInsert p f c
-            return (c', f)
-        (Just f, _) -> return (c, f)
+        (Nothing, Just v) -> do
+            c' <- cacheInsert p v c
+            return (c', val)
+        _ -> return (c, val)
 
-withCache :: Typeable c => Caches -> (Cache c -> IO (Cache c, a)) -> IO a
+getCachedOrStored :: Typeable a => Pos -> IO a -> MVar Caches -> IO a
+getCachedOrStored p m cs = do
+    mval <- withCache cs (cacheLookup p)
+    case mval of
+        Just v -> return v
+        Nothing -> do
+            v <- m
+            withCache_ cs (cacheInsert p v)
+            return v
+
+withCache :: Typeable c => MVar Caches -> (Cache c -> IO (Cache c, a)) -> IO a
 withCache cs f = modifyMVar cs $ \cmap -> do
     let mc = M.lookup mt cmap >>= fromDynamic
         mt = typeOf $ fromJust mc
@@ -147,17 +150,14 @@ withCache cs f = modifyMVar cs $ \cmap -> do
     (c', a) <- f c
     return (M.insert mt (toDyn c') cmap, a)
 
-withCache_ :: Typeable c => Caches -> (Cache c -> IO (Cache c)) -> IO ()
+withCache_ :: Typeable c => MVar Caches -> (Cache c -> IO (Cache c)) -> IO ()
 withCache_ cs f = withCache cs $ \c -> f c >>= \c' -> return (c', ())
 
 -- | A Position in a file.
 type Pos = Word64
 
 -- FFH is a FixFile Handle. This is an internal data structure.
-newtype FFH = FFH (MVar (Handle, Caches))
-
-withFFH :: FFH -> (Handle -> Caches -> IO a) -> IO a
-withFFH (FFH mv) f = withMVar mv $ \(h, c) -> f h c
+data FFH = FFH (MVar Handle) (MVar Caches)
 
 getRawBlock :: Binary a => Handle -> Pos -> IO a
 getRawBlock h p = do
@@ -166,20 +166,23 @@ getRawBlock h p = do
     decode <$> BSL.hGet h (fromIntegral sb)
 
 getBlock :: (Typeable f, Binary (f Pos)) => Pos -> FFH -> IO (f Pos)
-getBlock p ffh = withFFH ffh readFromFile where
-    readFromFile h cs = withCache cs $ (getCachedOrStored p $ getRawBlock h p)
+getBlock p (FFH mh mc) = getCachedOrStored p readFromFile mc where
+    readFromFile = withMVar mh $ flip getRawBlock p
 
 putBlock :: (Typeable a, Binary a) => a -> FFH -> IO Pos
-putBlock a ffh = withFFH ffh $ \h cs -> do
-    hSeek h SeekFromEnd 0
-    p <- fromIntegral <$> hTell h
-    let enc  = encode a
-        len  = fromIntegral $ BSL.length enc
-        len' = encode (len :: Word32)
-        enc' = mappend len' enc
-    BSL.hPut h enc'
-    withCache_ cs (cacheInsert p a)
-    return p
+putBlock a (FFH mh mc) = putRawBlock >>= cacheBlock where
+    putRawBlock = withMVar mh $ \h -> do
+        hSeek h SeekFromEnd 0
+        p <- fromIntegral <$> hTell h
+        let enc  = encode a
+            len  = fromIntegral $ BSL.length enc
+            len' = encode (len :: Word32)
+            enc' = mappend len' enc
+        BSL.hPut h enc'
+        return p
+    cacheBlock p = do
+        withCache_ mc (cacheInsert p a)
+        return p
 
 -- | A 'Stored\'' is a fixpoint combinator for data that is potentially
 -- | file-backed.
@@ -216,22 +219,14 @@ storedPos' :: Stored s f -> Pos
 storedPos' (InS (Cached p _)) = p
 storedPos' _ = error "Improper sync of data structure."
 
-sync' :: (Traversable f, Binary (f Pos), Typeable f) =>
-    FFH -> Stored s f -> IO Pos
-sync' h = commit . outS where
-    commit (Memory r) = do
-        r' <- mapM (sync' h) r
-        putBlock r' h
-    commit (Cached p _) = return p
-
 -- | Write the stored data to disk so that the on-disk representation 
 --   matches what is in memory.
-sync :: (Typeable f, Traversable f, Binary (f Pos)) =>
-    Stored s f -> Transaction f s Pos
-sync = commit . outS where
+sync :: (Traversable f, Binary (f Pos), Typeable f) =>
+    FFH -> Stored s f -> IO Pos
+sync h = commit . outS where
     commit (Memory r) = do
-        r' <- mapM sync r
-        withHandle' $ putBlock r'
+        r' <- mapM (sync h) r
+        putBlock r' h
     commit (Cached p _) = return p
 
 -- | 'RT' is a read transaction of 's'
@@ -280,7 +275,7 @@ data Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
 
 instance (Typeable f, Binary (f Pos), Traversable f) => Root (Ref f) where
     readRoot (Ref (Ptr p)) = Ref <$> (withHandle $ flip readStoredLazy p)
-    writeRoot (Ref a) = (Ref . Ptr) <$> (withHandle $ flip sync' a)
+    writeRoot (Ref a) = (Ref . Ptr) <$> (withHandle $ flip sync a)
     fromMemRep (Ref a) = Ref . iso $ a
     toMemRep (Ref a) = Ref . iso $ a
 
@@ -409,14 +404,14 @@ withWriteLock ff f = do
     f `finally` releaseWriteLock ff
 
 readHeader :: FFH -> IO (Pos)
-readHeader ffh = withFFH ffh $ \h _ -> do
+readHeader (FFH mh _) = withMVar mh $ \h -> do
     hSeek h AbsoluteSeek 0
     decode <$> BSL.hGet h 8
 
 updateHeader :: Pos -> RootTransaction r (WT s) ()
 updateHeader p = do
-    withHandle $ \ffh -> 
-        withFFH ffh $ \h _ -> do
+    withHandle $ \(FFH mh _) -> 
+        withMVar mh $ \h -> do
             hSeek h AbsoluteSeek 0
             BSL.hPut h (encode p)
             hFlush h
@@ -438,8 +433,8 @@ createFixFile init path =
 createFixFileHandle :: (Root r, Binary (r Ptr), Typeable r) =>
     r Fix -> FilePath -> Handle -> IO (FixFile r)
 createFixFileHandle init path h = do
-    c <- createCaches
-    ffh <- FFH <$> newMVar (h, c)
+    c <- newMVar M.empty
+    ffh <- FFH <$> newMVar h <*> newMVar M.empty
     BSL.hPut h (encode (0 :: Pos))
     let t = runRT $ do
             dr <- writeRoot $ fromMemRep init
@@ -464,8 +459,8 @@ openFixFile path =
 openFixFileHandle :: Binary (r Ptr) => FilePath -> Handle ->
     IO (FixFile r)
 openFixFileHandle path h = do
-    c <- createCaches
-    ffh <- FFH <$> newMVar (h, c)
+    c <- newMVar M.empty
+    ffh <- FFH <$> newMVar h <*> newMVar M.empty
     root <- readHeader ffh >>= getRawBlock h 
     ffhmv <- newMVar (ffh, root)
     FixFile path ffhmv <$> newMVar ()
