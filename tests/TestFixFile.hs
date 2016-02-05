@@ -58,15 +58,15 @@ prop_FileInsert xs = monadicIO testIns where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                subTransaction (tr1.ref) $
+                fTransaction (tr1.ref) $
                     insertMapT k v
-                subTransaction (tr2.ref) $
+                fTransaction (tr2.ref) $
                     insertSetT v
             res1 <- readTransaction ff $ do
-                subTransaction (tr1.ref) $
+                fTransaction (tr1.ref) $
                     mapM lookupMapT (fmap fst xs)
             res2 <- readTransaction ff $ do
-                subTransaction (tr2.ref) $
+                fTransaction (tr2.ref) $
                     mapM lookupSetT (fmap snd xs)
             res1' <- evaluate $ all isJust res1
             res2' <- evaluate $ all id res2
@@ -80,14 +80,14 @@ prop_Vacuum xs = monadicIO testVac where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                subTransaction (tr1.ref) $ insertMapT k v
-                subTransaction (tr2.ref) $ insertSetT v
+                fTransaction (tr1.ref) $ insertMapT k v
+                fTransaction (tr2.ref) $ insertSetT v
             vacuum ff
             res1 <- readTransaction ff $ do
-                subTransaction (tr1.ref) $
+                fTransaction (tr1.ref) $
                     mapM lookupMapT (fmap fst xs)
             res2 <- readTransaction ff $ do
-                subTransaction (tr2.ref) $
+                fTransaction (tr2.ref) $
                     mapM lookupSetT (fmap snd xs)
             res1' <- evaluate $ all isJust res1
             res2' <- evaluate $ all id res2
@@ -101,25 +101,50 @@ prop_FileDelete xs deli dels = monadicIO testDels where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                subTransaction (tr1.ref) $ insertMapT k v
-                subTransaction (tr2.ref) $ insertSetT v
+                fTransaction (tr1.ref) $ insertMapT k v
+                fTransaction (tr2.ref) $ insertSetT v
             writeTransaction ff $ 
-                subTransaction (tr1.ref) $
+                fTransaction (tr1.ref) $
                     mapM_ deleteMapT deli
             writeTransaction ff $
-                subTransaction (tr2.ref) $
+                fTransaction (tr2.ref) $
                     mapM_ deleteSetT dels
             res1 <- readTransaction ff $ do
-                subTransaction (tr1.ref) $
+                fTransaction (tr1.ref) $
                     mapM lookupMapT deli
             res2 <- readTransaction ff $ do
-                subTransaction (tr2.ref) $
+                fTransaction (tr2.ref) $
                     mapM lookupSetT dels
             res1' <- evaluate $ all isNothing res1
             res2' <- evaluate $ all not res2
             return (res1', res2')
         assert res1
         assert res2
+
+prop_OpenClose :: [(Int, String)] -> Property
+prop_OpenClose xs = monadicIO testOpenClose where
+    testOpenClose = do
+        (res1, res2) <- withTestFile $ \f h -> do
+            ff <- createFixFileHandle emptyTR f h
+            forM_ xs $ \(k, v) -> writeTransaction ff $ do
+                fTransaction (tr1.ref) $
+                    insertMapT k v
+                fTransaction (tr2.ref) $
+                    insertSetT v
+            closeFixFile ff
+            ff <- openFixFile f
+            res1 <- readTransaction ff $ do
+                fTransaction (tr1.ref) $
+                    mapM lookupMapT (fmap fst xs)
+            res2 <- readTransaction ff $ do
+                fTransaction (tr2.ref) $
+                    mapM lookupSetT (fmap snd xs)
+            res1' <- evaluate $ all isJust res1
+            res2' <- evaluate $ all id res2
+            return (res1', res2')
+        assert res1
+        assert res2
+            
 
 prop_Concurrent :: [(Int, String)] -> [(Int, String)] -> Property
 prop_Concurrent xs repls = monadicIO testCon where
@@ -128,31 +153,31 @@ prop_Concurrent xs repls = monadicIO testCon where
     desired = fmap (Just . snd) cleanRepl
     readFn ff wmv resmv = do
         w <- any id <$> mapM isEmptyMVar wmv
-        vals1 <- readTransaction ff $ subTransaction (tr1.ref) $
+        vals1 <- readTransaction ff $ fTransaction (tr1.ref) $
             mapM lookupMapT keys
         res1 <- evaluate $ vals1 == desired
-        vals2 <- readTransaction ff $ subTransaction (tr2.ref) $
+        vals2 <- readTransaction ff $ fTransaction (tr2.ref) $
             mapM lookupSetT (fmap snd repls)
         res2 <- evaluate $ all not vals2
         if w
-            then threadDelay 100000 >> readFn ff wmv resmv
+            then yield >> readFn ff wmv resmv
             else putMVar resmv (res1, res2)
     writeFn1 ff wmv = do
-        threadDelay 100
-        forM_ xs $ \(k,v) -> writeTransaction ff $ subTransaction (tr1.ref) $
+        yield
+        forM_ xs $ \(k,v) -> writeTransaction ff $ fTransaction (tr1.ref) $
             insertMapT k v
-        threadDelay 100
+        yield
         vacuum ff
         forM_ cleanRepl $ \(k, v) -> writeTransaction ff $
-            subTransaction (tr1.ref) $ insertMapT k v
+            fTransaction (tr1.ref) $ insertMapT k v
         putMVar wmv True
     writeFn2 ff wmv = do
-        threadDelay 100
-        forM_ xs $ \(_, v) -> writeTransaction ff $ subTransaction (tr2.ref) $
+        yield
+        forM_ xs $ \(_, v) -> writeTransaction ff $ fTransaction (tr2.ref) $
             insertSetT v
-        threadDelay 100
+        yield
         vacuum ff
-        forM_ xs $ \(_, v) -> writeTransaction ff $ subTransaction (tr2.ref) $
+        forM_ xs $ \(_, v) -> writeTransaction ff $ fTransaction (tr2.ref) $
             deleteSetT v
         putMVar wmv True
     wrapThread io = do
@@ -183,5 +208,6 @@ testFixFile = testGroup "FixFile"
         testProperty "Insert" prop_FileInsert
        ,testProperty "Vacuum" prop_Vacuum
        ,testProperty "Delete" prop_FileDelete
+       ,testProperty "Open/Close" prop_OpenClose
        ,testProperty "Concurrent" prop_Concurrent
     ]

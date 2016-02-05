@@ -161,16 +161,16 @@ openSetFile :: (Binary k, Typeable k) =>
     FilePath ->IO (FixFile (Ref (TreeD (Set k))))
 openSetFile fp = openFixFile fp
 
--- | 'Transaction' version of 'insertSet'.
-insertSetT :: (Binary k, Ord k) => k -> Transaction (TreeD (Set k)) (WT s) ()
+-- | 'FTransaction' version of 'insertSet'.
+insertSetT :: (Binary k, Ord k) => k -> FTransaction (TreeD (Set k)) (WT s) ()
 insertSetT k = alterT (insertSet k) 
 
--- | 'Transaction' version of 'lookupSet'.
-lookupSetT :: (Binary k, Ord k) => k -> Transaction (TreeD (Set k)) s Bool
+-- | 'FTransaction' version of 'lookupSet'.
+lookupSetT :: (Binary k, Ord k) => k -> FTransaction (TreeD (Set k)) s Bool
 lookupSetT k = lookupT (lookupSet k)
 
--- | 'Transaction' version of 'deleteSet'.
-deleteSetT :: (Binary k, Ord k) => k -> Transaction (TreeD (Set k)) (WT s) ()
+-- | 'FTransaction' version of 'deleteSet'.
+deleteSetT :: (Binary k, Ord k) => k -> FTransaction (TreeD (Set k)) (WT s) ()
 deleteSetT k = alterT (deleteSet k)
 
 -- | A 'Map' of keys 'k' to values 'v' represented as a Two-Three Tree.
@@ -247,25 +247,25 @@ openMapFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
     FilePath -> IO (FixFile (Ref (TreeD (Map k v))))
 openMapFile fp = openFixFile fp
 
--- | 'Transaction' version of 'insertMap'.
+-- | 'FTransaction' version of 'insertMap'.
 insertMapT :: (Binary k, Binary v, Ord k) => k -> v ->
-    Transaction (TreeD (Map k v)) (WT s) ()
+    FTransaction (TreeD (Map k v)) (WT s) ()
 insertMapT k v = alterT (insertMap k v) 
 
--- | 'Transaction' version of 'lookupMap'.
+-- | 'FTransaction' version of 'lookupMap'.
 lookupMapT :: (Binary k, Binary v, Ord k) => k ->
-    Transaction (TreeD (Map k v)) s (Maybe v)
+    FTransaction (TreeD (Map k v)) s (Maybe v)
 lookupMapT k = lookupT (lookupMap k)
 
--- | 'Transaction' version of 'deleteMap'.
+-- | 'FTransaction' version of 'deleteMap'.
 deleteMapT :: (Binary k, Binary v, Ord k) => k ->
-    Transaction (TreeD (Map k v)) (WT s) ()
+    FTransaction (TreeD (Map k v)) (WT s) ()
 deleteMapT k = alterT (deleteMap k)
 
--- | 'Transaction' version of 'alterMap'.
+-- | 'FTransaction' version of 'alterMap'.
 alterMapT :: (Binary k, Binary v, Ord k) => k ->
     (Maybe v -> Maybe v) -> 
-    Transaction (TreeD (Map k v)) (WT s) ()
+    FTransaction (TreeD (Map k v)) (WT s) ()
 alterMapT k f = alterT (alterMap k f)
 
 -- lookup the value (if it exists) from a Fixed Tree23 for a given key.
