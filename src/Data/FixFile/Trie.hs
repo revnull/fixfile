@@ -161,8 +161,9 @@ lookupTrie a b = cata phi b a where
         t <- M.lookup c l
         t r
 
--- | 'FTransaction' version of 'lookupTrie'.
-lookupTrieT :: Binary v => BS.ByteString -> FTransaction (Trie v) s (Maybe v)
+-- | 'Transaction' version of 'lookupTrie'.
+lookupTrieT :: Binary v =>
+    BS.ByteString -> Transaction (Ref (Trie v)) s (Maybe v)
 lookupTrieT k = lookupT (lookupTrie k)
 
 splitKey :: BS.ByteString -> BS.ByteString ->
@@ -211,8 +212,9 @@ insertTrie a b c = para phi c a where
             Nothing -> M.insert kh (fill kt Nothing valTail) $ fmap fst m
             Just (_, ta) -> M.insert kh (ta kt) $ fmap fst m
 
--- | 'FTransaction' version of 'insertTrie'.
-insertTrieT :: Binary v => BS.ByteString -> v -> FTransaction (Trie v) (WT s) ()
+-- | 'Transaction' version of 'insertTrie'.
+insertTrieT :: Binary v =>
+    BS.ByteString -> v -> Transaction (Ref (Trie v)) s ()
 insertTrieT k v = alterT (insertTrie k v)
  
 data Deleted g v = 
@@ -284,8 +286,9 @@ deleteTrie a b = newHead $ para phi b a where
                     in Deleted False mut' Nothing
                 _ -> NoDelete
 
--- | 'FTransaction' version of 'deleteTrie'.
-deleteTrieT :: Binary v => BS.ByteString -> FTransaction (Trie v) (WT s) ()
+-- | 'Transaction' version of 'deleteTrie'.
+deleteTrieT :: Binary v =>
+    BS.ByteString -> Transaction (Ref (Trie v)) s ()
 deleteTrieT k = alterT (deleteTrie k)
 
 -- | Iterate over a Trie for all of the 'ByteString' and value tuples for a
@@ -328,9 +331,9 @@ iterateTrie a b = cata phi b a BS.empty [] where
                 Nothing -> l
                 Just r -> r k'' (BS.snoc k' i) l
 
--- | 'FTransaction' version of 'iterateTrie'.
+-- | 'Transaction' version of 'iterateTrie'.
 iterateTrieT :: Binary v => BS.ByteString ->
-    FTransaction (Trie v) s [(BS.ByteString, v)]
+    Transaction (Ref (Trie v)) s [(BS.ByteString, v)]
 iterateTrieT k = lookupT (iterateTrie k)
 
 -- | Map a function over a 'Fixed' 'Trie'. Because of the data types used,

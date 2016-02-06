@@ -37,8 +37,7 @@ instance Binary (TestRoot Ptr)
 instance Root (TestRoot) where
     readRoot (TR a b) = TR <$> readRoot a <*> readRoot b
     writeRoot (TR a b) = TR <$> writeRoot a <*> writeRoot b
-    fromMemRep (TR a b) = TR (fromMemRep a) (fromMemRep b)
-    toMemRep (TR a b) = TR (toMemRep a) (toMemRep b)
+    rootIso (TR a b) = TR (rootIso a) (rootIso b)
 
 emptyTR :: TestRoot Fix
 emptyTR = TR (Ref empty) (Ref empty)
@@ -58,15 +57,15 @@ prop_FileInsert xs = monadicIO testIns where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     insertMapT k v
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     insertSetT v
             res1 <- readTransaction ff $ do
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     mapM lookupMapT (fmap fst xs)
             res2 <- readTransaction ff $ do
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     mapM lookupSetT (fmap snd xs)
             res1' <- evaluate $ all isJust res1
             res2' <- evaluate $ all id res2
@@ -80,14 +79,14 @@ prop_Vacuum xs = monadicIO testVac where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                fTransaction (tr1.ref) $ insertMapT k v
-                fTransaction (tr2.ref) $ insertSetT v
+                subTransaction tr1 $ insertMapT k v
+                subTransaction tr2 $ insertSetT v
             vacuum ff
             res1 <- readTransaction ff $ do
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     mapM lookupMapT (fmap fst xs)
             res2 <- readTransaction ff $ do
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     mapM lookupSetT (fmap snd xs)
             res1' <- evaluate $ all isJust res1
             res2' <- evaluate $ all id res2
@@ -101,19 +100,19 @@ prop_FileDelete xs deli dels = monadicIO testDels where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                fTransaction (tr1.ref) $ insertMapT k v
-                fTransaction (tr2.ref) $ insertSetT v
+                subTransaction tr1 $ insertMapT k v
+                subTransaction tr2 $ insertSetT v
             writeTransaction ff $ 
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     mapM_ deleteMapT deli
             writeTransaction ff $
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     mapM_ deleteSetT dels
             res1 <- readTransaction ff $ do
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     mapM lookupMapT deli
             res2 <- readTransaction ff $ do
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     mapM lookupSetT dels
             res1' <- evaluate $ all isNothing res1
             res2' <- evaluate $ all not res2
@@ -127,17 +126,17 @@ prop_OpenClose xs = monadicIO testOpenClose where
         (res1, res2) <- withTestFile $ \f h -> do
             ff <- createFixFileHandle emptyTR f h
             forM_ xs $ \(k, v) -> writeTransaction ff $ do
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     insertMapT k v
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     insertSetT v
             closeFixFile ff
             ff <- openFixFile f
             res1 <- readTransaction ff $ do
-                fTransaction (tr1.ref) $
+                subTransaction tr1 $
                     mapM lookupMapT (fmap fst xs)
             res2 <- readTransaction ff $ do
-                fTransaction (tr2.ref) $
+                subTransaction tr2 $
                     mapM lookupSetT (fmap snd xs)
             res1' <- evaluate $ all isJust res1
             res2' <- evaluate $ all id res2
@@ -153,10 +152,10 @@ prop_Concurrent xs repls = monadicIO testCon where
     desired = fmap (Just . snd) cleanRepl
     readFn ff wmv resmv = do
         w <- any id <$> mapM isEmptyMVar wmv
-        vals1 <- readTransaction ff $ fTransaction (tr1.ref) $
+        vals1 <- readTransaction ff $ subTransaction tr1 $
             mapM lookupMapT keys
         res1 <- evaluate $ vals1 == desired
-        vals2 <- readTransaction ff $ fTransaction (tr2.ref) $
+        vals2 <- readTransaction ff $ subTransaction tr2 $
             mapM lookupSetT (fmap snd repls)
         res2 <- evaluate $ all not vals2
         if w
@@ -164,20 +163,20 @@ prop_Concurrent xs repls = monadicIO testCon where
             else putMVar resmv (res1, res2)
     writeFn1 ff wmv = do
         yield
-        forM_ xs $ \(k,v) -> writeTransaction ff $ fTransaction (tr1.ref) $
+        forM_ xs $ \(k,v) -> writeTransaction ff $ subTransaction tr1 $
             insertMapT k v
         yield
         vacuum ff
         forM_ cleanRepl $ \(k, v) -> writeTransaction ff $
-            fTransaction (tr1.ref) $ insertMapT k v
+            subTransaction tr1 $ insertMapT k v
         putMVar wmv True
     writeFn2 ff wmv = do
         yield
-        forM_ xs $ \(_, v) -> writeTransaction ff $ fTransaction (tr2.ref) $
+        forM_ xs $ \(_, v) -> writeTransaction ff $ subTransaction tr2 $
             insertSetT v
         yield
         vacuum ff
-        forM_ xs $ \(_, v) -> writeTransaction ff $ fTransaction (tr2.ref) $
+        forM_ xs $ \(_, v) -> writeTransaction ff $ subTransaction tr2 $
             deleteSetT v
         putMVar wmv True
     wrapThread io = do

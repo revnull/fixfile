@@ -27,6 +27,13 @@ module Data.FixFile.Fixed (
 
 {-|
     'Fixed' is a typeclass for representing the fixed point of a 'Functor'.
+    A well-behaved instance of 'Fixed' should not change the shape of the
+    underlying 'Functor'.
+
+    In other words, the following should always be true:
+@
+'outf' ('inf' x) == x
+@
  -}
 class Fixed g where
     inf :: f (g f) -> g f
@@ -80,8 +87,8 @@ para f = f . fmap para' . outf where
 
 {-|
     'iso' maps from a fixed point of a 'Functor' to a different fixed
-    point of the same 'Functor'. The shape of the 'Functor' should
-    remain unchanged.
+    point of the same 'Functor'. For any two well-behaved instances of
+    'Fixed', the shape of the 'Functor' should remain unchanged.
 -}
 iso :: (Functor f, Fixed g, Fixed h) => g f -> h f
 iso = cata inf

@@ -154,9 +154,9 @@ insertBTree k v = merge . para phi where
             Split _ lt rt -> newNode d newSize $
                 children p ++ [lt, rt] ++ children n
 
--- | 'FTransaction' version of 'insertBTree'.
+-- | 'Transaction' version of 'insertBTree'.
 insertBTreeT :: (Ord k, Binary k, Binary v) => k -> v ->
-    FTransaction (BTree k v) (WT s) ()
+    Transaction (Ref (BTree k v)) s ()
 insertBTreeT k v = alterT (insertBTree k v)
 
 -- | Lookup the values stored for the key 'k' in a 'Fixed' @('BTree' k v)@.
@@ -170,9 +170,9 @@ lookupBTree k = ($ []) . cata phi where
         let (_, c, _) = splitRange k a
         in foldr ($) l $ fmap snd c
 
--- | 'FTransaction' version of 'lookupBTree'.
+-- | 'Transaction' version of 'lookupBTree'.
 lookupBTreeT :: (Ord k, Binary k, Binary v) => k ->
-    FTransaction (BTree k v) s [v]
+    Transaction (Ref (BTree k v)) s [v]
 lookupBTreeT k = lookupT (lookupBTree k)
 
 data Deleted k v g =
@@ -227,18 +227,18 @@ filterBTree k f t = deleted' . para phi $ t where
             (True, False) -> Deleted mink $ node d $
                 array (0, length al - 1) $ zip [0..] al
 
--- | 'FTransaction' version of 'filterBTree'.
+-- | 'Transaction' version of 'filterBTree'.
 filterBTreeT :: (Ord k, Binary k, Binary v) => k -> (v -> Bool) ->
-    FTransaction (BTree k v) (WT s) ()
+    Transaction (Ref (BTree k v)) s ()
 filterBTreeT k f = alterT (filterBTree k f)
 
 -- | Delete all items for key 'k' from the 'Fixed' @('BTree' k v)@.
 deleteBTree :: (Ord k, Fixed g) => k -> g (BTree k v) -> g (BTree k v)
 deleteBTree k = filterBTree k (const False)
 
--- | 'FTransaction' version of 'deleteBTree'.
+-- | 'Transaction' version of 'deleteBTree'.
 deleteBTreeT :: (Ord k, Binary k, Binary v) => k ->
-    FTransaction (BTree k v) (WT s) ()
+    Transaction (Ref (BTree k v)) s ()
 deleteBTreeT k = alterT (deleteBTree k)
 
 -- | Turn a 'Fixed' @('BTree' k v)@ into a list of key value tuples.

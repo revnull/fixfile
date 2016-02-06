@@ -3,7 +3,7 @@
     FunctionalDependencies, TypeFamilies, UndecidableInstances,
     DeriveDataTypeable, DeriveGeneric #-}
 
-{-|
+{- |
     
     Module      :  Data.FixFile
     Copyright   :  (C) 2016 Rev. Johnny Healey
@@ -23,6 +23,11 @@
     but should have instances of 'Foldable', 'Traversable', and 'Binary' and
     should be structured such that the fixed point of the data type is
     recursive.
+
+    There is also the concept of the 'Root' data of a 'FixFile'.  This can be
+    used as a kind of header for a FixFile that can allow several recursive
+    data structures to be modified in a single transaction.
+
  -}
 
 module Data.FixFile (
@@ -54,17 +59,11 @@ module Data.FixFile (
                      ,vacuum
                      -- * Transactions
                      ,Transaction
-                     ,FTransaction
-                     ,RT
-                     ,WT
                      ,alterT
                      ,lookupT
                      ,readTransaction
                      ,writeTransaction
                      ,subTransaction
-                     ,fTransaction
-                     ,getRoot
-                     ,putRoot
                      ,getFull
                      ) where
 
@@ -196,51 +195,55 @@ sync h = commit where
         putBlock r' h
     commit (Cached p _) = return p
 
--- | 'RT' is a read transaction of 's'
-data RT s
--- | 'WT' is a write transaction of 's'
-data WT s
-
-newtype FTransaction (f :: * -> *) s a = FTransaction {
-    runT :: RWS.RWST FFH () (Stored s f) IO a
-  }
-
-instance Functor (FTransaction f s) where
-    fmap f (FTransaction t) = FTransaction $ fmap f t
-
-instance Applicative (FTransaction f s) where
-    pure = FTransaction . pure
-    FTransaction a <*> FTransaction b = FTransaction $ a <*> b
-
-instance Monad (FTransaction f s) where
-    return = pure
-    FTransaction t >>= f = FTransaction $ RWS.RWST $ \ffh root -> do
-        (a, root', w) <- RWS.runRWST t ffh root
-        (a', root'', w') <- RWS.runRWST (runT $ f a) ffh root'
-        return (a', root'', w `mappend` w')
-
+{- |
+    A 'Ptr' is a 'Pos' with a phantom type for a functor 'f'. A 'Root' expects
+    an argument that resembles a 'Fixed', but we can pass it a 'Ptr' instead.
+    This is not a well-formed 'Fixed' because it doesn't actually store 'f'.
+    But, it can be serialized, which allows a 'Root' object that takes this
+    as an argument to be serialized.
+-}
 newtype Ptr (f :: * -> *) = Ptr Pos
     deriving Generic
 
 instance Binary (Ptr f)
 
-class Root (r :: (((* -> *) -> *) -> *)) where
-    readRoot :: r Ptr -> Transaction r' s (r (Stored s))
-    writeRoot :: r (Stored (WT s)) -> Transaction r' (WT s) (r Ptr)
-    fromMemRep :: r Fix -> r (Stored s)
-    toMemRep :: r (Stored s) -> r Fix
+{- |
+    A 'Root' datastructure acts as a kind of header that can contain one or
+    more 'Ref's to different recursive structures. It takes one argument,
+    which has the kind of @((* -> *) -> *)@. This argument should be either an
+    instance of 'Fixed' or a 'Ptr'. If it is an instance of 'Fixed', then
+    the 'Root' can contain recursive data structures. If it is passed 'Ptr'
+    as an argument, then the 'Root' will contain a non-recursive structure,
+    but can be serialized.
 
+-}
+class Root (r :: (((* -> *) -> *) -> *)) where
+    -- | Deserialize @'r' 'Ptr'@ inside a 'Transaction'.
+    readRoot :: r Ptr -> Transaction r' s (r (Stored s))
+    -- | Serialize @'r' 'Ptr'@ inside a 'Transaction'. This will result in
+    -- | changes to any recursive structures to be written as well.
+    writeRoot :: r (Stored s) -> Transaction r' s (r Ptr)
+
+    -- | 'iso', but applied to an instance of 'Root'.
+    rootIso :: (Fixed g, Fixed h) => r g -> r h
+
+{- |
+    A 'Ref' is a reference to a 'Functor' 'f' in the 'Fixed' instance of 'g'.
+
+    This is an instance of 'Root' and acts to bridge between the 'Root' and
+    the recursively defined data structure that is @('g' 'f')@.
+-}
 data Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
     deriving (Generic)
 
 instance (Typeable f, Binary (f Pos), Traversable f) => Root (Ref f) where
     readRoot (Ref (Ptr p)) = Ref <$> (withHandle $ flip readStoredLazy p)
     writeRoot (Ref a) = (Ref . Ptr) <$> (withHandle $ flip sync a)
-    fromMemRep (Ref a) = Ref . iso $ a
-    toMemRep (Ref a) = Ref . iso $ a
+    rootIso = Ref . iso . deRef
 
 instance Binary (Ref f Ptr)
 
+-- | Lens for accessing the value stored in a Ref
 ref :: Lens' (Ref f g) (g f)
 ref = lens (\(Ref a) -> a) (\_ b -> Ref b)
 
@@ -248,8 +251,7 @@ ref = lens (\(Ref a) -> a) (\_ b -> Ref b)
     A 'Transaction' is an isolated execution of a read or update operation
     on the root object stored in a 'FixFile'. 'r' is the 'Root' data that is
     stored by the 'FixFile'. 's' is a phantom type used to isolate 'Stored'
-    values to the transaction where they are run. 'a' is the result of the
-    transaction.
+    values to the transaction where they are run.
 -}
 newtype Transaction r s a = Transaction {
     runRT :: RWS.RWST FFH (Last (r Ptr)) (r (Stored s)) IO a
@@ -269,38 +271,22 @@ instance Monad (Transaction f s) where
         (a', root'', w') <- RWS.runRWST (runRT $ f a) ffh root'
         return (a', root'', w `mappend` w')
 
+instance RWS.MonadState (r (Stored s)) (Transaction r s) where
+    get = Transaction $ RWS.get
+    put = Transaction . RWS.put
+    state = Transaction . RWS.state
+
+{- |
+    Perform a 'Transaction' on a part of the root object.
+-}
 subTransaction :: Lens' (r (Stored s)) (r' (Stored s)) -> Transaction r' s a ->
     Transaction r s a
 subTransaction l st = Transaction $ RWS.RWST $ \ffh root -> do
     (a, r, _) <- RWS.runRWST (runRT st) ffh (root^.l)
     return (a, set l r root, mempty)
 
-fTransaction :: Lens' (r (Stored s)) (Stored s f) -> FTransaction f s a ->
-    Transaction r s a
-fTransaction l st = Transaction $ RWS.RWST $ \ffh root -> do
-    (a, r, _) <- RWS.runRWST (runT st) ffh (root^.l)
-    return (a, set l r root, mempty)
-
 withHandle :: (FFH -> IO a) -> Transaction r s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
-
--- | Get the root object stored in the file.
-getRoot :: Transaction r s (r (Stored s))
-getRoot = Transaction $ RWS.get
-
-getFixed :: FTransaction f s (Stored s f)
-getFixed = FTransaction $ RWS.get
-
--- | Update the root object of the file. This only takes effect at the
---   end of the tranaction.
-putRoot :: Root r => r (Stored (WT s)) -> Transaction r (WT s) ()
-putRoot =  putRoot'
-
-putRoot' :: Root r => r (Stored s) -> Transaction r s ()
-putRoot' = Transaction . RWS.put
-
-putFixed :: Stored (WT s) f -> FTransaction f (WT s) ()
-putFixed = FTransaction . RWS.put
 
 readStoredLazy :: (Traversable f, Binary (f Pos), Typeable f) =>
     FFH -> Pos -> IO (Stored s f)
@@ -312,25 +298,24 @@ readStoredLazy h p = do
 {- |
     The preferred way to modify the root object of a 'FixFile' is by using
     'alterT'. It applies a function that takes the root object as a
-    @'Stored' ('WT' s) 'f'@ and returns the new desired head of the
+    @'Stored' 's' 'f'@ and returns the new desired head of the
     same type.
 -}
-alterT :: (tr ~ FTransaction f (WT s), Traversable f, Binary (f Pos)) =>
-    (Stored (WT s) f -> Stored (WT s) f) -> tr ()
-alterT f = getFixed >>= putFixed . f
+alterT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f Pos)) =>
+    (Stored s f -> Stored s f) -> tr ()
+alterT f = ref %= f
 
 {- |
     The preferred way to read from a 'FixFile' is to use 'lookupT'. It
     applies a function that takes a @'Stored' s f@ and returns a value.
 -}
-lookupT :: (tr ~ FTransaction f s, Traversable f, Binary (f Pos)) =>
+lookupT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f Pos)) =>
     (Stored s f -> a) -> tr a
-lookupT f = f <$> getFixed
-
+lookupT f = f <$> use ref
 
 {- |
     A 'FixFile' is a handle for accessing a file-backed recursive data
-    structure. 'f' is the 'Functor' that the file is storing.
+    structure. 'r' is the 'Root' object stored in the 'FixFile'.
 -}
 data FixFile r = FixFile FilePath (MVar (FFH, r Ptr)) (MVar ())
 
@@ -352,7 +337,7 @@ readHeader (FFH mh _) = withMVar mh $ \h -> do
     hSeek h AbsoluteSeek 0
     decode <$> BSL.hGet h 8
 
-updateHeader :: Pos -> Transaction r (WT s) ()
+updateHeader :: Pos -> Transaction r s ()
 updateHeader p = do
     withHandle $ \(FFH mh _) -> 
         withMVar mh $ \h -> do
@@ -380,7 +365,7 @@ createFixFileHandle initial path h = do
     ffh <- FFH <$> newMVar h <*> newMVar M.empty
     BSL.hPut h (encode (0 :: Pos))
     let t = runRT $ do
-            dr <- writeRoot $ fromMemRep initial
+            dr <- writeRoot $ rootIso initial
             (withHandle $ putBlock dr) >>= updateHeader
             Transaction . RWS.tell . Last . Just $ dr
     (_,_,root') <- RWS.runRWST t ffh undefined
@@ -407,6 +392,10 @@ openFixFileHandle path h = do
     ffhmv <- newMVar (ffh, root)
     FixFile path ffhmv <$> newMVar ()
 
+{- |
+    Close a 'FixFile'. This can potentially cause errors on data that is lazily
+    being read from a 'Transaction'.
+-}
 closeFixFile :: FixFile r -> IO ()
 closeFixFile (FixFile path tmv _) = do
     (FFH mh _, _) <- takeMVar tmv
@@ -422,10 +411,10 @@ closeFixFile (FixFile path tmv _) = do
     of the transaction.
 -}
 readTransaction :: Root r => FixFile r ->
-    (forall s. Transaction r (RT s) a) -> IO a
+    (forall s. Transaction r s a) -> IO a
 readTransaction (FixFile _ ffhmv _) t = do
     (ffh, root) <- readMVar ffhmv
-    let t' = readRoot root >>= putRoot' >> t
+    let t' = readRoot root >>= RWS.put >> t
     (a, _) <- RWS.evalRWST (runRT t') ffh undefined
     return a
 
@@ -435,15 +424,15 @@ readTransaction (FixFile _ ffhmv _) t = do
     potentially be updated by this 'Transaction'.
 -}
 writeTransaction :: (Root r, Binary (r Ptr), Typeable r) => 
-    FixFile r -> (forall s. Transaction r (WT s) a)
+    FixFile r -> (forall s. Transaction r s a)
     -> IO a
 writeTransaction ff@(FixFile _ ffhmv _) t = res where
-    res = withWriteLock ff runFTransaction
-    runFTransaction = do
+    res = withWriteLock ff runTransaction
+    runTransaction = do
         (ffh, root) <- readMVar ffhmv
-        let t' = readRoot root >>= putRoot >> t >>= save
+        let t' = readRoot root >>= RWS.put >> t >>= save
             save a = do
-                dr <- getRoot >>= writeRoot
+                dr <- RWS.get >>= writeRoot
                 (withHandle $ putBlock dr) >>= updateHeader
                 Transaction . RWS.tell . Last . Just $ dr
                 return a
@@ -457,8 +446,8 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
 {- |
     Get the full datastructure from the transaction as a @'Fix' f@.
 -}
-getFull :: (Traversable f, Binary (f Pos)) => FTransaction f s (Fix f)
-getFull = iso <$> getFixed
+getFull :: Functor f => Transaction (Ref f) s (Fix f)
+getFull = uses ref iso
 
 {- |
     Because a 'FixFile' is backed by an append-only file, there is a periodic
@@ -467,7 +456,7 @@ getFull = iso <$> getFixed
     replaces the file that backs FixFile.
 
     The memory usage of this operation scales with the recursive depth of the
-    full structure stored in the file.
+    structure stored in the file.
 -}
 vacuum :: (Root r, Binary (r Ptr), Typeable r) =>
     FixFile r -> IO ()
@@ -481,7 +470,7 @@ vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
         (tp, th) <- openTempFile (takeDirectory path) ".ffile.tmp"
         hClose th
 
-        rootMem <- readTransaction readDB (toMemRep <$> getRoot)
+        rootMem <- readTransaction readDB (rootIso <$> RWS.get)
         (FixFile _ newMV _) <- createFixFile rootMem tp
 
         renameFile tp path

@@ -61,8 +61,8 @@ insertSet i s = newHead $ para phi s where
         LT -> la >>= \l -> return $ node l j rn
         GT -> ra >>= \r -> return $ node ln j r
 
--- | 'FTransaction' version of 'insertSet'.
-insertSetT :: (Ord i, Binary i) => i -> FTransaction (Set i) (WT s) ()
+-- | 'Transaction' version of 'insertSet'.
+insertSetT :: (Ord i, Binary i) => i -> Transaction (Ref (Set i)) s ()
 insertSetT i = alterT (insertSet i)
 
 -- | Delete an item 'i' into a 'Fixed' recursive @'Set' i@.
@@ -76,8 +76,8 @@ deleteSet i s = newHead $ para phi s Nothing where
         GT -> ra Nothing >>= \r -> return $ node ln j r
     phi (Node (ln, _) j (_, ra)) x = node ln j <$> ra x
 
--- | 'FTransaction' version of 'deleteSet'.
-deleteSetT :: (Ord i, Binary i) => i -> FTransaction (Set i) (WT s) ()
+-- | 'Transaction' version of 'deleteSet'.
+deleteSetT :: (Ord i, Binary i) => i -> Transaction (Ref (Set i)) s ()
 deleteSetT i = alterT (deleteSet i)
 
 -- | Predicate to lookup an item from a @'Set' i@.
@@ -90,7 +90,7 @@ lookupSet i = cata phi where
         GT -> ra
 
 -- | 'FTransaction' version of 'lookupSet'.
-lookupSetT :: (Ord i, Binary i) => i -> FTransaction (Set i) s Bool
+lookupSetT :: (Ord i, Binary i) => i -> Transaction (Ref (Set i)) s Bool
 lookupSetT i = lookupT (lookupSet i)
 
 -- | Create a @'FixFile' ('Set' i)@.
@@ -109,7 +109,7 @@ toListSet s = cata phi s [] where
     phi Empty l = l
     phi (Node la i ra) l = (la . (i:) . ra) l
 
--- | 'FTransaction' version of 'toListSet'.
-toListSetT :: Binary i => FTransaction (Set i) s [i]
+-- | 'Transaction' version of 'toListSet'.
+toListSetT :: Binary i => Transaction (Ref (Set i)) s [i]
 toListSetT = lookupT toListSet
 
