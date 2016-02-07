@@ -35,7 +35,6 @@ module Data.FixFile (
                       Fixed(..)
                      ,Fix(..)
                      ,Stored
-                     ,Pos
                      -- * F-Algebras
                      ,CataAlg
                      ,cata
@@ -78,6 +77,7 @@ import Control.Monad.Trans
 import Data.Binary
 import Data.ByteString.Lazy as BSL
 import Data.Dynamic
+import Data.Hashable
 import Data.HashTable.IO
 import qualified Data.Map as M
 import Data.Maybe
@@ -93,7 +93,8 @@ import Data.FixFile.Fixed
 
 type HashTable k v = CuckooHashTable k v
 
-data Cache a = Cache Int (HashTable Pos a) (HashTable Pos a)
+data Cache f = Cache Int (HashTable (Ptr f) (f (Ptr f)))
+    (HashTable (Ptr f) (f (Ptr f)))
     deriving (Typeable)
 
 type Caches = M.Map TypeRep Dynamic
@@ -101,7 +102,7 @@ type Caches = M.Map TypeRep Dynamic
 createCache :: IO (Cache f)
 createCache = Cache 0 <$> new <*> new
 
-cacheInsert :: Pos -> a -> Cache a -> IO (Cache a)
+cacheInsert :: Ptr f -> f (Ptr f) -> Cache f -> IO (Cache f)
 cacheInsert p f (Cache i oc nc) =
     if i >= 50
         then new >>= cacheInsert p f . Cache 0 nc
@@ -109,7 +110,7 @@ cacheInsert p f (Cache i oc nc) =
             insert nc p f
             return (Cache (i + 1) oc nc)
 
-cacheLookup :: Pos -> Cache a -> IO (Cache a, Maybe a)
+cacheLookup :: Ptr f -> Cache f -> IO (Cache f, Maybe (f (Ptr f)))
 cacheLookup p c@(Cache _ oc nc) = do
     nval <- lookup nc p
     val <- maybe (lookup oc p) (return . Just) nval
@@ -119,7 +120,8 @@ cacheLookup p c@(Cache _ oc nc) = do
             return (c', val)
         _ -> return (c, val)
 
-getCachedOrStored :: Typeable a => Pos -> IO a -> MVar Caches -> IO a
+getCachedOrStored :: Typeable f => Ptr f -> IO (f (Ptr f)) -> MVar Caches ->
+    IO (f (Ptr f))
 getCachedOrStored p m cs = do
     mval <- withCache cs (cacheLookup p)
     case mval of
@@ -140,7 +142,6 @@ withCache cs f = modifyMVar cs $ \cmap -> do
 withCache_ :: Typeable c => MVar Caches -> (Cache c -> IO (Cache c)) -> IO ()
 withCache_ cs f = withCache cs $ \c -> f c >>= \c' -> return (c', ())
 
--- | A Position in a file.
 type Pos = Word64
 
 -- FFH is a FixFile Handle. This is an internal data structure.
@@ -152,13 +153,13 @@ getRawBlock h p = do
     (sb :: Word32) <- decode <$> (BSL.hGet h 4)
     decode <$> BSL.hGet h (fromIntegral sb)
 
-getBlock :: (Typeable f, Binary (f Pos)) => Pos -> FFH -> IO (f Pos)
-getBlock p (FFH mh mc) = getCachedOrStored p readFromFile mc where
-    readFromFile = withMVar mh $ flip getRawBlock p
+getBlock :: (Typeable f, Binary (f (Ptr f))) => (Ptr f) -> FFH -> IO (f (Ptr f))
+getBlock p@(Ptr pos) (FFH mh mc) = getCachedOrStored p readFromFile mc where
+    readFromFile = withMVar mh $ flip getRawBlock pos
 
-putBlock :: (Typeable a, Binary a) => a -> FFH -> IO Pos
-putBlock a (FFH mh mc) = putRawBlock >>= cacheBlock where
-    putRawBlock = withMVar mh $ \h -> do
+putRawBlock :: Binary a => a -> FFH -> IO Pos
+putRawBlock a (FFH mh _) = putRaw where
+    putRaw = withMVar mh $ \h -> do
         hSeek h SeekFromEnd 0
         p <- fromIntegral <$> hTell h
         let enc  = encode a
@@ -167,6 +168,10 @@ putBlock a (FFH mh mc) = putRawBlock >>= cacheBlock where
             enc' = mappend len' enc
         BSL.hPut h enc'
         return p
+
+putBlock :: (Typeable f, Binary (f (Ptr f))) => (f (Ptr f)) -> FFH ->
+    IO (Ptr f)
+putBlock a h@(FFH _ mc) = putRawBlock a h >>= cacheBlock . Ptr where
     cacheBlock p = do
         withCache_ mc (cacheInsert p a)
         return p
@@ -178,17 +183,19 @@ data Stored s f =
     -- | A memory-only instance of 'a'.
     Memory (f (Stored s f))
     -- | An instance of 'a' that is file-backed.
-  | Cached !Pos (f (Stored s f))
+  | Cached {-# UNPACK #-} !(Ptr f) (f (Stored s f))
 
 instance Fixed (Stored s) where
     inf = Memory
+    {-# INLINE inf #-}
     outf (Memory a) = a
     outf (Cached _ a) = a
+    {-# INLINE outf #-}
 
 -- | Write the stored data to disk so that the on-disk representation 
 --   matches what is in memory.
-sync :: (Traversable f, Binary (f Pos), Typeable f) =>
-    FFH -> Stored s f -> IO Pos
+sync :: (Traversable f, Binary (f (Ptr f)), Typeable f) =>
+    FFH -> Stored s f -> IO (Ptr f)
 sync h = commit where
     commit (Memory r) = do
         r' <- mapM commit r
@@ -196,16 +203,21 @@ sync h = commit where
     commit (Cached p _) = return p
 
 {- |
-    A 'Ptr' is a 'Pos' with a phantom type for a functor 'f'. A 'Root' expects
-    an argument that resembles a 'Fixed', but we can pass it a 'Ptr' instead.
-    This is not a well-formed 'Fixed' because it doesn't actually store 'f'.
+    A 'Ptr' points to a location in a 'FixFile' and has a phantom type for a 
+    'Functor' 'f'. A 'Root' expects an argument that resembles a 'Fixed',
+    but we can pass it a 'Ptr' instead. This is not a well-formed 'Fixed'
+    because it can't be unpacked into @'f' ('Ptr' 'f')@.
+    
     But, it can be serialized, which allows a 'Root' object that takes this
     as an argument to be serialized.
 -}
 newtype Ptr (f :: * -> *) = Ptr Pos
-    deriving Generic
+    deriving (Generic, Eq, Ord, Read, Show)
 
 instance Binary (Ptr f)
+
+instance Hashable (Ptr f) where
+    hashWithSalt x (Ptr y) = hashWithSalt x y
 
 {- |
     A 'Root' datastructure acts as a kind of header that can contain one or
@@ -236,9 +248,9 @@ class Root (r :: (((* -> *) -> *) -> *)) where
 data Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
     deriving (Generic)
 
-instance (Typeable f, Binary (f Pos), Traversable f) => Root (Ref f) where
-    readRoot (Ref (Ptr p)) = Ref <$> (withHandle $ flip readStoredLazy p)
-    writeRoot (Ref a) = (Ref . Ptr) <$> (withHandle $ flip sync a)
+instance (Typeable f, Binary (f (Ptr f)), Traversable f) => Root (Ref f) where
+    readRoot (Ref p) = Ref <$> (withHandle $ flip readStoredLazy p)
+    writeRoot (Ref a) = Ref <$> (withHandle $ flip sync a)
     rootIso = Ref . iso . deRef
 
 instance Binary (Ref f Ptr)
@@ -288,8 +300,8 @@ subTransaction l st = Transaction $ RWS.RWST $ \ffh root -> do
 withHandle :: (FFH -> IO a) -> Transaction r s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
 
-readStoredLazy :: (Traversable f, Binary (f Pos), Typeable f) =>
-    FFH -> Pos -> IO (Stored s f)
+readStoredLazy :: (Traversable f, Binary (f (Ptr f)), Typeable f) =>
+    FFH -> Ptr f -> IO (Stored s f)
 readStoredLazy h p = do
     f <- getBlock p h
     let fcons = Cached p
@@ -301,7 +313,7 @@ readStoredLazy h p = do
     @'Stored' 's' 'f'@ and returns the new desired head of the
     same type.
 -}
-alterT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f Pos)) =>
+alterT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f (Ptr f))) =>
     (Stored s f -> Stored s f) -> tr ()
 alterT f = ref %= f
 
@@ -309,7 +321,7 @@ alterT f = ref %= f
     The preferred way to read from a 'FixFile' is to use 'lookupT'. It
     applies a function that takes a @'Stored' s f@ and returns a value.
 -}
-lookupT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f Pos)) =>
+lookupT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f (Ptr f))) =>
     (Stored s f -> a) -> tr a
 lookupT f = f <$> use ref
 
@@ -366,7 +378,7 @@ createFixFileHandle initial path h = do
     BSL.hPut h (encode (0 :: Pos))
     let t = runRT $ do
             dr <- writeRoot $ rootIso initial
-            (withHandle $ putBlock dr) >>= updateHeader
+            (withHandle $ putRawBlock dr) >>= updateHeader
             Transaction . RWS.tell . Last . Just $ dr
     (_,_,root') <- RWS.runRWST t ffh undefined
     let Just root = getLast root'
@@ -433,7 +445,7 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
         let t' = readRoot root >>= RWS.put >> t >>= save
             save a = do
                 dr <- RWS.get >>= writeRoot
-                (withHandle $ putBlock dr) >>= updateHeader
+                (withHandle $ putRawBlock dr) >>= updateHeader
                 Transaction . RWS.tell . Last . Just $ dr
                 return a
         (a, root') <- RWS.evalRWST (runRT t') ffh undefined

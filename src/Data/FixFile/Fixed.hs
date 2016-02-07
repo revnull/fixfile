@@ -48,7 +48,9 @@ newtype Fix f = InF { outF :: f (Fix f) }
 
 instance Fixed Fix where
     inf = InF
+    {-# INLINE inf #-}
     outf = outF
+    {-# INLINE outf #-}
 
 {-|
     'AnaAlg' is an anamorpism F-Algebra.
