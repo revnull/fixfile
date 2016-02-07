@@ -4,16 +4,23 @@
 name:                   fixfile
 version:                0.1.0.0
 synopsis:               File-backed recursive data structures.
--- description:         
+homepage:               https://github.com/revnull/fixfile
 license:                LGPL-3
 license-file:           LICENSE
 author:                 Rev. Johnny Healey
-maintainer:             rev.null@gmail.com
+maintainer:             Rev. Johnny Healey <rev.null@gmail.com>
 -- copyright:           
 category:               Data
 build-type:             Simple
 -- extra-source-files:  
 cabal-version:          >=1.10
+description:
+    This package is a library for datatype-generic disk serialization. It
+    provides a file abstraction that uses multi-version concurrency control
+    to support transaction-aware isolation for multi-threaded access.
+
+    The base library comes with a collection of datatypes to provide sets and
+    key-value stores with different properties.
 
 library
   build-depends:        base >=4.8
