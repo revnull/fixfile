@@ -18,6 +18,7 @@ module Data.FixFile.Tree23 (Tree23
                            ,empty
                            ,null
                            ,size
+                           ,depth
                            -- | * Set
                            ,Set
                            ,createSetFile
@@ -25,11 +26,13 @@ module Data.FixFile.Tree23 (Tree23
                            ,insertSet
                            ,lookupSet
                            ,deleteSet
+                           ,partitionSet
                            ,toListSet
                            ,fromListSet
                            ,insertSetT
                            ,lookupSetT
                            ,deleteSetT
+                           ,partitionSetT
                            -- | * Map
                            ,Map
                            ,createMapFile
@@ -37,6 +40,7 @@ module Data.FixFile.Tree23 (Tree23
                            ,insertMap
                            ,lookupMap
                            ,deleteMap
+                           ,partitionMap
                            ,alterMap
                            ,mapMap
                            ,toListMap
@@ -44,9 +48,11 @@ module Data.FixFile.Tree23 (Tree23
                            ,insertMapT
                            ,lookupMapT
                            ,deleteMapT
+                           ,partitionMapT
                            ,alterMapT
                            ,keysMap
                            ,valuesMap
+                           ,partitionTree23
                            ) where
 
 import Prelude hiding (null)
@@ -114,6 +120,14 @@ size = cata phi where
     phi (Two l _ r) = l + r
     phi (Three l _ m _ r) = l + m + r
 
+-- | The depth of @('Tree23' g d)@. @0@ represents en empty Tree.
+depth :: Fixed g => Tree23 g d -> Int
+depth = cata phi where
+    phi Empty = 0
+    phi (Leaf _ _) = 1
+    phi (Two l _ _) = l + 1
+    phi (Three l _ _ _ _) = l + 1
+
 -- | A 'Set' of 'k' represented as a Two-Three Tree.
 data Set k
 
@@ -138,6 +152,11 @@ lookupSet k = isJust . lookupTree23 (SK k)
 -- | Delete an item from a set.
 deleteSet :: (Fixed g, Ord k) => k -> Tree23 g (Set k) -> Tree23 g (Set k)
 deleteSet k = alterTree23 (SK k) (const $ Just Nothing)
+
+-- | Split a set into sets of items < k and >= k
+partitionSet :: (Fixed g, Ord k) => k -> Tree23 g (Set k) ->
+    (Tree23 g (Set k), Tree23 g (Set k))
+partitionSet k = partitionTree23 (SK k)
 
 -- | Convert a set into a list of items.
 toListSet :: (Fixed g, Ord k) => Tree23 g (Set k) -> [k]
@@ -176,6 +195,11 @@ deleteSetT :: (Binary k, Ord k) =>
     k -> Transaction (Ref (TreeD (Set k))) s ()
 deleteSetT k = alterT (deleteSet k)
 
+-- | 'Transaction' version of 'partitionSet'.
+partitionSetT :: (Binary k, Ord k, f ~ TreeD (Set k)) => k ->
+    Transaction (Ref f) s (Stored s f, Stored s f)
+partitionSetT k = lookupT (partitionSet k)
+
 -- | A 'Map' of keys 'k' to values 'v' represented as a Two-Three Tree.
 data Map k v
 
@@ -209,6 +233,11 @@ deleteMap k = alterTree23 (MK k) (const . Just $ Nothing)
 alterMap :: (Fixed g, Ord k) => k -> (Maybe v -> Maybe v) ->
     Tree23 g (Map k v) -> Tree23 g (Map k v)
 alterMap k f = alterTree23 (MK k) (Just . fmap MV . f . fmap fromMV)
+
+-- | Split a set into maps for keys < k and >= k
+partitionMap :: (Fixed g, Ord k) => k -> Tree23 g (Map k v) ->
+    (Tree23 g (Map k v), Tree23 g (Map k v))
+partitionMap k = partitionTree23 (MK k)
 
 -- | Convert a map into a list of key-value tuples.
 toListMap :: (Fixed g, Ord k) => Tree23 g (Map k v) -> [(k,v)]
@@ -264,6 +293,11 @@ lookupMapT k = lookupT (lookupMap k)
 deleteMapT :: (Binary k, Binary v, Ord k) => k ->
     Transaction (Ref (TreeD (Map k v))) s ()
 deleteMapT k = alterT (deleteMap k)
+
+-- | 'Transaction' version of 'partitionMap'.
+partitionMapT :: (Binary k, Ord k, Binary v, f ~ TreeD (Map k v)) => k ->
+    Transaction (Ref f) s (Stored s f, Stored s f)
+partitionMapT k = lookupT (partitionMap k)
 
 -- | 'FTransaction' version of 'alterMap'.
 alterMapT :: (Binary k, Binary v, Ord k) => k ->
@@ -403,4 +437,86 @@ alterTree23 k f t = processHead $ para phi t t where
                 Two ln' k1' rn' -> Changed Nothing $ two ln k1
                     (three ln' k1' rn' (maybe k2 id uk) un)
                 _ -> error "Invalid Tree23"
+
+
+data SkewDir = L | R
+
+data Partition g d =
+    NoPartition
+  | Skew SkewDir
+  | Split2 (Int, Tree23 g d) (Int, Tree23 g d)
+
+merge :: (Fixed g, Ord (TreeKey d)) => Int -> Tree23 g d -> TreeKey d ->
+    Int -> Tree23 g d -> (Int, Tree23 g d)
+merge ld ln k rd rn
+    | ld == rd = (ld + 1, two ln k rn)
+    | ld < rd = case (rd - ld, outf rn) of
+        (1, Two rln rk rrn) -> (rd, three ln k rln rk rrn)
+        (1, Three rln rk1 rmn rk2 rrn) ->
+            (rd + 1, two (two ln k rln) rk1 (two rmn rk2 rrn))
+        (_, Two rln rk rrn) ->
+            let (ld', rln') = merge ld ln k (rd - 1) rln
+            in merge ld' rln' rk (rd - 1) rrn
+        (_, Three rln rk1 rmn rk2 rrn) ->
+            let (ld', rln') = merge ld ln k (rd - 1) rln
+            in merge ld' rln' rk1 (rd - 1) (two rmn rk2 rrn)
+        _ -> error "Malformed Tree23"
+    | otherwise = case (ld - rd, outf ln) of
+        (1, Two lln lk lrn) -> (ld, three lln lk lrn k rn)
+        (1, Three lln lk1 lmn lk2 lrn) ->
+            (ld + 1, two (two lln lk1 lmn) lk2 (two lrn k rn))
+        (_, Two lln lk lrn) ->
+            let (rd', lrn') = merge (ld - 1) lrn k rd rn
+            in merge (ld - 1) lln lk rd' lrn'
+        (_, Three lln lk1 lmn lk2 lrn) ->
+            let (rd', lrn') = merge (ld - 1) lrn k rd rn
+            in merge (ld - 1) (two lln lk1 lmn) lk2 rd' lrn'
+        _ -> error "Malformed Tree23"
+
+partitionTree23 :: (Fixed g, Ord (TreeKey d)) => TreeKey d ->
+    Tree23 g d -> (Tree23 g d, Tree23 g d)
+partitionTree23 k t = resp $ para phi t where
+    resp NoPartition = (t, t)
+    resp (Skew L) = (t, empty)
+    resp (Skew R) = (empty, t)
+    resp (Split2 (_, l) (_, r)) = (l, r)
+    phi Empty = NoPartition
+    phi (Leaf k' _) 
+        | k' < k = Skew L
+        | otherwise = Skew R
+    phi (Two (ln, la) k' (rn, ra))
+        | k' == k = Split2 (-1, ln) (-1, rn)
+        | k' < k = case ra of
+            Skew L -> Skew L
+            Skew R -> Split2 (-1, ln) (-1, rn)
+            Split2 (lbal, lv) (rbal, rv) ->
+                Split2 (merge (-1) ln k' lbal lv) (rbal - 1, rv)
+            _ -> error "Malformed Tree23"
+        | otherwise = case la of
+            Skew L -> Split2 (-1, ln) (-1, rn)
+            Skew R -> Skew R
+            Split2 (lbal, lv) (rbal, rv) ->
+                Split2 (lbal - 1, lv) (merge rbal rv k' (-1) rn)
+            _ -> error "Malformed Tree23"
+    phi (Three (ln, la) k1 (mn, ma) k2 (rn, ra))
+        | k1 == k = Split2 (-1, ln) (0, two mn k2 rn)
+        | k2 == k = Split2 (0, two ln k1 mn) (-1, rn)
+        | k2 < k = case ra of
+            Skew L -> Skew L
+            Skew R -> Split2 (0, two ln k1 mn) (-1, rn)
+            Split2 (lbal, lv) (rbal, rv) ->
+                Split2 (merge 0 (two ln k1 mn) k2 lbal lv) (rbal - 1, rv)
+            _ -> error "Malformed Tree23"
+        | k1 < k = case ma of
+            Skew L -> Split2 (0, two ln k1 mn) (-1, rn)
+            Skew R -> Split2 (-1, ln) (0, two mn k2 rn)
+            Split2 (lbal, lv) (rbal, rv) ->
+                Split2 (merge (-1) ln k1 lbal lv) (merge rbal rv k2 (-1) rn)
+            _ -> error "Malformed Tree23"
+        | otherwise = case la of
+            Skew R -> Skew R
+            Skew L -> Split2 (-1, ln) (0, two mn k2 rn)
+            Split2 (lbal, lv) (rbal, rv) ->
+                Split2 (lbal -1, lv) (merge rbal rv k2 0 (two mn k2 rn))
+            _ -> error "Malformed Tree23"
 

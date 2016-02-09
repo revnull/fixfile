@@ -28,6 +28,14 @@ prop_SetDeleteAll xs = allDeleted where
     delSet = foldr deleteSet fullSet xs
     allDeleted = [] == toListSet delSet
 
+prop_SetPartition :: [Int] -> Int -> Bool
+prop_SetPartition xs i = parted where
+    fullSet = fromListSet xs :: Tree23 Fix (Set Int)
+    (ltSet', gteSet') = partitionSet i fullSet
+    ltSet = toListSet ltSet'
+    gteSet = toListSet gteSet'
+    parted = all (< i) ltSet && all (>= i) gteSet
+
 prop_MapInsert :: [(Int,String)] -> Bool
 prop_MapInsert xs = allIns where
     empt = empty :: Tree23 Fix (Map Int String)
@@ -55,6 +63,14 @@ prop_MapDeleteAll xs = allDeleted where
     delSet = foldr deleteMap fullSet $ fmap fst xs
     allDeleted = [] == toListMap delSet
 
+prop_MapPartition :: [(Int, String)] -> Int -> Bool
+prop_MapPartition xs i = parted where
+    fullMap = fromListMap xs :: Tree23 Fix (Map Int String)
+    (ltMap', gteMap') = partitionMap i fullMap
+    ltMap = fmap fst $ toListMap ltMap'
+    gteMap = fmap fst $ toListMap gteMap'
+    parted = all (< i) ltMap && all (>= i) gteMap
+
 prop_MapMap :: [(Int,String)] -> String -> Bool
 prop_MapMap xs pre = allMap where
     empt = empty :: Tree23 Fix (Map Int String)
@@ -71,6 +87,7 @@ test23 = testGroup "Tree23"
             testProperty "Set Insert" prop_SetInsert
            ,testProperty "Set Delete" prop_SetDelete
            ,testProperty "Set Delete All" prop_SetDeleteAll
+           ,testProperty "Set Partition" prop_SetPartition
         ]
        ,testGroup "Map"
        [
@@ -78,6 +95,7 @@ test23 = testGroup "Tree23"
            ,testProperty "Map Delete" prop_MapDelete
            ,testProperty "Map Replace" prop_MapReplace
            ,testProperty "Map Delete All" prop_MapDeleteAll
+           ,testProperty "Map Partition" prop_MapPartition
            ,testProperty "Map Map" prop_MapMap
        ]
     ]
