@@ -29,7 +29,7 @@ import Control.Concurrent.MVar
 import System.Timeout
 
 data TestRoot g =
-    TR (Ref (TreeD (Map Int String)) g) (Ref (TreeD (Set String)) g)
+    TR (Ref (Tree23 (Map Int String)) g) (Ref (Tree23 (Set String)) g)
     deriving (Generic)
 
 instance Binary (TestRoot Ptr)
@@ -42,10 +42,10 @@ instance Root (TestRoot) where
 emptyTR :: TestRoot Fix
 emptyTR = TR (Ref empty) (Ref empty)
 
-tr1 :: Lens' (TestRoot g) (Ref (TreeD (Map Int String)) g)
+tr1 :: Lens' (TestRoot g) (Ref (Tree23 (Map Int String)) g)
 tr1 = lens (\(TR a _) -> a) (\(TR _ b) a -> TR a b)
 
-tr2 :: Lens' (TestRoot g) (Ref (TreeD (Set String)) g)
+tr2 :: Lens' (TestRoot g) (Ref (Tree23 (Set String)) g)
 tr2 = lens (\(TR _ b) -> b) (\(TR a _) b -> TR a b)
 
 withTestFile :: (FilePath -> Handle -> IO a) -> PropertyM IO a
@@ -147,7 +147,7 @@ prop_OpenClose xs = monadicIO testOpenClose where
 
 prop_Concurrent :: [(Int, String)] -> [(Int, String)] -> Property
 prop_Concurrent xs repls = monadicIO testCon where
-    cleanRepl = toListMap $ (fromListMap repls :: Tree23 Fix (Map Int String))
+    cleanRepl = toListMap $ (fromListMap repls :: Fix (Tree23 (Map Int String)))
     keys = fmap fst cleanRepl
     desired = fmap (Just . snd) cleanRepl
     readFn ff wmv resmv = do

@@ -14,7 +14,6 @@
     used with 'FixFile'. It has two interfaces that are
 -}
 module Data.FixFile.Tree23 (Tree23
-                           ,TreeD
                            ,empty
                            ,null
                            ,size
@@ -73,15 +72,12 @@ data Tree23F k v a =
             Typeable)
 
 {- |
-    'Fixed' @('TreeD' d)@ represents a Two-Three tree. The data type 'd' should
+    'Fixed' @('Tree23' d)@ represents a Two-Three tree. The data type 'd' should
     have data families for it's key and value. These data families are not
     exported from the module. As a result, the only valid types for 'd' are
     @('Set' k)@ as defined here or @('Map' k v)@, also defined here.
 -}
-type TreeD d = Tree23F (TreeKey d) (TreeValue d)
-
--- | Type synonym for the 'Fixed' representation of a Two-Three Tree.
-type Tree23 g d = g (TreeD d)
+type Tree23 d = Tree23F (TreeKey d) (TreeValue d)
 
 data family TreeKey d
 
@@ -91,29 +87,29 @@ instance (Binary a, Binary (TreeKey d), Binary (TreeValue d)) =>
     Binary (Tree23F (TreeKey d) (TreeValue d) a)
 
 -- | An empty 'Fixed' 'Tree23'.
-empty :: Fixed g => Tree23 g d
+empty :: Fixed g => g (Tree23 d)
 empty = inf Empty
 
-leaf :: Fixed g => TreeKey d -> TreeValue d -> Tree23 g d
+leaf :: Fixed g => TreeKey d -> TreeValue d -> g (Tree23 d)
 leaf k v = inf $ Leaf k v
 
-two :: Fixed g => Tree23 g d -> TreeKey d ->
-    Tree23 g d -> Tree23 g d
+two :: Fixed g => g (Tree23 d) -> TreeKey d ->
+    g (Tree23 d) -> g (Tree23 d)
 two l v r = inf $ Two l v r
 
-three :: Fixed g => Tree23 g d -> TreeKey d -> Tree23 g d ->
-    TreeKey d -> Tree23 g d -> Tree23 g d
+three :: Fixed g => g (Tree23 d) -> TreeKey d -> g (Tree23 d) ->
+    TreeKey d -> g (Tree23 d) -> g (Tree23 d)
 three l t1 m t2 r =
     inf $ Three l t1 m t2 r
 
 -- | Predicate that returns true if there are no items in the 'Tree23'.
-null :: Fixed g => Tree23 g d -> Bool
+null :: Fixed g => g (Tree23 d) -> Bool
 null = null' . outf where
     null' Empty = True
     null' _ = False
 
 -- | Number of entries in @('Tree23' g d)@.
-size :: Fixed g => Tree23 g d -> Int
+size :: Fixed g => g (Tree23 d) -> Int
 size = cata phi where
     phi Empty = 0
     phi (Leaf _ _) = 1
@@ -121,7 +117,7 @@ size = cata phi where
     phi (Three l _ m _ r) = l + m + r
 
 -- | The depth of @('Tree23' g d)@. @0@ represents en empty Tree.
-depth :: Fixed g => Tree23 g d -> Int
+depth :: Fixed g => g (Tree23 d) -> Int
 depth = cata phi where
     phi Empty = 0
     phi (Leaf _ _) = 1
@@ -142,24 +138,23 @@ instance Binary k => Binary (TreeKey (Set k))
 instance Binary (TreeValue (Set k))
 
 -- | Insert an item into a set.
-insertSet :: (Fixed g, Ord k) => k -> Tree23 g (Set k) -> Tree23 g (Set k)
+insertSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => k -> g f -> g f
 insertSet k = alterTree23 (SK k) (maybe (Just $ Just SV) (const Nothing))
 
 -- | Lookup an item in a set.
-lookupSet :: (Fixed g, Ord k) => k -> Tree23 g (Set k) -> Bool
+lookupSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => k -> g f -> Bool
 lookupSet k = isJust . lookupTree23 (SK k)
 
 -- | Delete an item from a set.
-deleteSet :: (Fixed g, Ord k) => k -> Tree23 g (Set k) -> Tree23 g (Set k)
+deleteSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => k -> g f -> g f
 deleteSet k = alterTree23 (SK k) (const $ Just Nothing)
 
 -- | Split a set into sets of items < k and >= k
-partitionSet :: (Fixed g, Ord k) => k -> Tree23 g (Set k) ->
-    (Tree23 g (Set k), Tree23 g (Set k))
+partitionSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => k -> g f -> (g f, g f)
 partitionSet k = partitionTree23 (SK k)
 
 -- | Convert a set into a list of items.
-toListSet :: (Fixed g, Ord k) => Tree23 g (Set k) -> [k]
+toListSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => g f -> [k]
 toListSet = ($ []) . cata phi where
     phi Empty xs = xs
     phi (Leaf (SK k) _) xs = k:xs
@@ -167,36 +162,36 @@ toListSet = ($ []) . cata phi where
     phi (Three la _ ma _ ra) xs = la . ma . ra $ xs
 
 -- | Convert a list of items into a set.
-fromListSet :: (Fixed g, Ord k) => [k] -> Tree23 g (Set k)
+fromListSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => [k] -> g f
 fromListSet = Prelude.foldr insertSet empty
 
 -- | Create a 'FixFile' for storing a set of items.
-createSetFile :: (Binary k, Typeable k) =>
-    FilePath -> IO (FixFile (Ref (TreeD (Set k))))
+createSetFile :: (Binary k, Typeable k, f ~ Tree23 (Set k)) =>
+    FilePath -> IO (FixFile (Ref f))
 createSetFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' for storing a set of items.
-openSetFile :: (Binary k, Typeable k) =>
-    FilePath ->IO (FixFile (Ref (TreeD (Set k))))
+openSetFile :: (Binary k, Typeable k, f ~ Tree23 (Set k)) =>
+    FilePath ->IO (FixFile (Ref f))
 openSetFile fp = openFixFile fp
 
 -- | 'Transaction' version of 'insertSet'.
-insertSetT :: (Binary k, Ord k) =>
-    k -> Transaction (Ref (TreeD (Set k))) s ()
+insertSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+    k -> Transaction (Ref f) s ()
 insertSetT k = alterT (insertSet k) 
 
 -- | 'FTransaction' version of 'lookupSet'.
-lookupSetT :: (Binary k, Ord k) =>
-    k -> Transaction (Ref (TreeD (Set k))) s Bool
+lookupSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+    k -> Transaction (Ref f) s Bool
 lookupSetT k = lookupT (lookupSet k)
 
 -- | 'FTransaction' version of 'deleteSet'.
-deleteSetT :: (Binary k, Ord k) =>
-    k -> Transaction (Ref (TreeD (Set k))) s ()
+deleteSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+    k -> Transaction (Ref f) s ()
 deleteSetT k = alterT (deleteSet k)
 
 -- | 'Transaction' version of 'partitionSet'.
-partitionSetT :: (Binary k, Ord k, f ~ TreeD (Set k)) => k ->
+partitionSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) => k ->
     Transaction (Ref f) s (Stored s f, Stored s f)
 partitionSetT k = lookupT (partitionSet k)
 
@@ -214,33 +209,32 @@ instance Binary k => Binary (TreeKey (Map k v))
 instance Binary v => Binary (TreeValue (Map k v))
 
 -- | Insert value 'v' into a map for key 'k'. Any existing value is replaced.
-insertMap :: (Fixed g, Ord k) => k -> v -> Tree23 g (Map k v) ->
-    Tree23 g (Map k v)
+insertMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => k -> v -> g f -> g f
 insertMap k v = alterTree23 (MK k) (const . Just . Just $ MV v)
 
 -- | Lookup an item in a map corresponding to key 'k'.
-lookupMap :: (Fixed g, Ord k) => k -> Tree23 g (Map k v) -> Maybe v
+lookupMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => k -> g f -> Maybe v
 lookupMap k = fmap toV . lookupTree23 (MK k) where
     toV (MV v) = v
 
 -- | Delete an item from a map at key 'k'.
-deleteMap :: (Fixed g, Ord k) => k -> Tree23 g (Map k v) -> Tree23 g (Map k v)
+deleteMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => k -> g f -> g f
 deleteMap k = alterTree23 (MK k) (const . Just $ Nothing)
 
 -- | Apply a function to alter a Map at key 'k'. The function takes
 --   @('Maybe' v)@ as an argument for any possible exiting value and returns
 --   @Nothing@ to delete a value or @Just v@ to set a new value.
-alterMap :: (Fixed g, Ord k) => k -> (Maybe v -> Maybe v) ->
-    Tree23 g (Map k v) -> Tree23 g (Map k v)
+alterMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) =>
+    k -> (Maybe v -> Maybe v) -> g f -> g f
 alterMap k f = alterTree23 (MK k) (Just . fmap MV . f . fmap fromMV)
 
 -- | Split a set into maps for keys < k and >= k
-partitionMap :: (Fixed g, Ord k) => k -> Tree23 g (Map k v) ->
-    (Tree23 g (Map k v), Tree23 g (Map k v))
+partitionMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) =>
+    k -> g f -> (g f, g f)
 partitionMap k = partitionTree23 (MK k)
 
 -- | Convert a map into a list of key-value tuples.
-toListMap :: (Fixed g, Ord k) => Tree23 g (Map k v) -> [(k,v)]
+toListMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> [(k,v)]
 toListMap = ($ []) . cata phi where
     phi Empty xs = xs
     phi (Leaf (MK k) (MV v)) xs = (k,v):xs
@@ -248,21 +242,21 @@ toListMap = ($ []) . cata phi where
     phi (Three la _ ma _ ra) xs = la . ma . ra $ xs
 
 -- | Convert a lst of key-value tuples into a map.
-fromListMap :: (Fixed g, Ord k) => [(k,v)] -> Tree23 g (Map k v)
+fromListMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => [(k,v)] -> g f
 fromListMap = Prelude.foldr (uncurry insertMap) empty
 
 -- | Return the list of keys in a map.
-keysMap :: (Fixed g, Ord k) => Tree23 g (Map k v) -> [k]
+keysMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> [k]
 keysMap = fmap fst . toListMap
 
 -- | Return a list of values in a map.
-valuesMap :: (Fixed g, Ord k) => Tree23 g (Map k v) -> [v]
+valuesMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> [v]
 valuesMap = fmap snd . toListMap
 
 -- | Map a function over a map. Because of the way Tree23 is implemented, it is
 --   not possible to create a Functor instance to achieve this.
-mapMap :: (Fixed g, Fixed h, Ord k) => (a -> b) -> Tree23 g (Map k a) ->
-    Tree23 h (Map k b)
+mapMap :: (Fixed g, Fixed h, Ord k) => (a -> b) -> g (Tree23 (Map k a)) ->
+    h (Tree23 (Map k b))
 mapMap f = cata phi where
     phi Empty = empty
     phi (Leaf (MK k) (MV a)) = leaf (MK k) (MV (f a))
@@ -270,44 +264,45 @@ mapMap f = cata phi where
     phi (Three l (MK k1) m (MK k2) r) = three l (MK k1) m (MK k2) r
 
 -- | Create a 'FixFile' of a Map.
-createMapFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
-    FilePath -> IO (FixFile (Ref (TreeD (Map k v))))
+createMapFile :: (Binary k, Typeable k, Binary v, Typeable v,
+        f ~ Tree23 (Map k v)) =>
+    FilePath -> IO (FixFile (Ref f))
 createMapFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' of a Map.
-openMapFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
-    FilePath -> IO (FixFile (Ref (TreeD (Map k v))))
+openMapFile :: (Binary k, Typeable k, Binary v, Typeable v,
+        f ~ Tree23 (Map k v)) =>
+    FilePath -> IO (FixFile (Ref f))
 openMapFile fp = openFixFile fp
 
 -- | 'Transaction' version of 'insertMap'.
-insertMapT :: (Binary k, Binary v, Ord k) =>
-    k -> v -> Transaction (Ref (TreeD (Map k v))) s ()
+insertMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+    k -> v -> Transaction (Ref f) s ()
 insertMapT k v = alterT (insertMap k v) 
 
 -- | 'Transaction' version of 'lookupMap'.
-lookupMapT :: (Binary k, Binary v, Ord k) =>
-    k -> Transaction (Ref (TreeD (Map k v))) s (Maybe v)
+lookupMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+    k -> Transaction (Ref f) s (Maybe v)
 lookupMapT k = lookupT (lookupMap k)
 
 -- | 'Transaction' version of 'deleteMap'.
-deleteMapT :: (Binary k, Binary v, Ord k) => k ->
-    Transaction (Ref (TreeD (Map k v))) s ()
+deleteMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+    k -> Transaction (Ref f) s ()
 deleteMapT k = alterT (deleteMap k)
 
 -- | 'Transaction' version of 'partitionMap'.
-partitionMapT :: (Binary k, Ord k, Binary v, f ~ TreeD (Map k v)) => k ->
-    Transaction (Ref f) s (Stored s f, Stored s f)
+partitionMapT :: (Binary k, Ord k, Binary v, f ~ Tree23 (Map k v)) =>
+    k -> Transaction (Ref f) s (Stored s f, Stored s f)
 partitionMapT k = lookupT (partitionMap k)
 
 -- | 'FTransaction' version of 'alterMap'.
-alterMapT :: (Binary k, Binary v, Ord k) => k ->
-    (Maybe v -> Maybe v) -> 
-    Transaction (Ref (TreeD (Map k v))) s ()
+alterMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+    k -> (Maybe v -> Maybe v) -> Transaction (Ref f) s ()
 alterMapT k f = alterT (alterMap k f)
 
 -- lookup the value (if it exists) from a Fixed Tree23 for a given key.
 lookupTree23 :: (Fixed g, Ord (TreeKey d)) => TreeKey d ->
-    Tree23 g d -> Maybe (TreeValue d)
+    g (Tree23 d) -> Maybe (TreeValue d)
 lookupTree23 k = cata phi where
     phi Empty = Nothing
     phi (Leaf k' v)
@@ -325,10 +320,10 @@ lookupTree23 k = cata phi where
 
 data Change g d =
     NoChange
-  | Changed (Maybe (TreeKey d)) (Tree23 g d)
-  | Unbalanced (Maybe (TreeKey d)) (Tree23 g d)
+  | Changed (Maybe (TreeKey d)) (g (Tree23 d))
+  | Unbalanced (Maybe (TreeKey d)) (g (Tree23 d))
   | Hole
-  | Split (Tree23 g d) (TreeKey d) (Tree23 g d)
+  | Split (g (Tree23 d)) (TreeKey d) (g (Tree23 d))
 
 -- So, this function is a bit overwhelming, but it does everything that to
 -- handle all of the operations that modify a 2-3 tree.
@@ -341,7 +336,7 @@ data Change g d =
 -- to be written to the tree.
 alterTree23 :: (Fixed g, Ord (TreeKey d)) => TreeKey d ->
     (Maybe (TreeValue d) -> Maybe (Maybe (TreeValue d))) ->
-    Tree23 g d -> Tree23 g d
+    g (Tree23 d) -> g (Tree23 d)
 alterTree23 k f t = processHead $ para phi t t where
     processHead NoChange = t
     processHead (Changed _ t') = t'
@@ -444,10 +439,10 @@ data SkewDir = L | R
 data Partition g d =
     NoPartition
   | Skew SkewDir
-  | Split2 (Int, Tree23 g d) (Int, Tree23 g d)
+  | Split2 (Int, g (Tree23 d)) (Int, g (Tree23 d))
 
-merge :: (Fixed g, Ord (TreeKey d)) => Int -> Tree23 g d -> TreeKey d ->
-    Int -> Tree23 g d -> (Int, Tree23 g d)
+merge :: (Fixed g, Ord (TreeKey d)) => Int -> g (Tree23 d) -> TreeKey d ->
+    Int -> g (Tree23 d) -> (Int, g (Tree23 d))
 merge ld ln k rd rn
     | ld == rd = (ld + 1, two ln k rn)
     | ld < rd = case (rd - ld, outf rn) of
@@ -474,7 +469,7 @@ merge ld ln k rd rn
         _ -> error "Malformed Tree23"
 
 partitionTree23 :: (Fixed g, Ord (TreeKey d)) => TreeKey d ->
-    Tree23 g d -> (Tree23 g d, Tree23 g d)
+    g (Tree23 d) -> (g (Tree23 d), g (Tree23 d))
 partitionTree23 k t = resp $ para phi t where
     resp NoPartition = (t, t)
     resp (Skew L) = (t, empty)

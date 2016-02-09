@@ -10,27 +10,29 @@ import Data.FixFile.Tree23
 
 import Data.Maybe
 
+empty23 :: Fix (Tree23 d)
+empty23 = empty
 
 prop_SetInsert :: [Int] -> Bool
 prop_SetInsert xs = allIns where
-    fullSet = foldr insertSet (empty :: Tree23 Fix (Set Int)) xs
+    fullSet = foldr insertSet empty23 xs
     allIns = all (flip lookupSet fullSet) xs
 
 prop_SetDelete :: [Int] -> [Int] -> Bool
 prop_SetDelete xs ys = allDels where
-    fullSet = foldr insertSet (empty :: Tree23 Fix (Set Int)) xs
+    fullSet = foldr insertSet empty23 xs
     delSet = foldr deleteSet fullSet ys
     allDels = all (not . flip lookupSet delSet) ys
 
 prop_SetDeleteAll :: [Int] -> Bool
 prop_SetDeleteAll xs = allDeleted where
-    fullSet = foldr insertSet (empty :: Tree23 Fix (Set Int)) xs
+    fullSet = foldr insertSet empty23 xs
     delSet = foldr deleteSet fullSet xs
     allDeleted = [] == toListSet delSet
 
 prop_SetPartition :: [Int] -> Int -> Bool
 prop_SetPartition xs i = parted where
-    fullSet = fromListSet xs :: Tree23 Fix (Set Int)
+    fullSet = fromListSet xs :: Fix (Tree23 (Set Int))
     (ltSet', gteSet') = partitionSet i fullSet
     ltSet = toListSet ltSet'
     gteSet = toListSet gteSet'
@@ -38,34 +40,34 @@ prop_SetPartition xs i = parted where
 
 prop_MapInsert :: [(Int,String)] -> Bool
 prop_MapInsert xs = allIns where
-    empt = empty :: Tree23 Fix (Map Int String)
+    empt = empty :: Fix (Tree23 (Map Int String))
     fullSet = foldr (uncurry insertMap) empt xs
     allIns = all (isJust . flip lookupMap fullSet) $ fmap fst xs
 
 prop_MapDelete :: [(Int,String)] -> [Int] -> Bool
 prop_MapDelete ins dels = allDels where
-    empt = empty :: Tree23 Fix (Map Int String)
-    fullSet = foldr (uncurry insertMap) empt ins
-    delSet = foldr deleteMap fullSet dels
+    fullMap :: Fix (Tree23 (Map Int String))
+    fullMap = fromListMap ins
+    delSet = foldr deleteMap fullMap dels
     allDels = all (isNothing . flip lookupMap delSet) dels
 
 prop_MapReplace :: [(Int,String)] ->  Int -> String -> String -> Bool
 prop_MapReplace ins rk rv rv' = replTest where
-    empt = empty :: Tree23 Fix (Map Int String)
-    fullSet = foldr (uncurry insertMap) empt ins
-    replSet = insertMap rk rv' $ insertMap rk rv fullSet
-    replTest = Just rv' == lookupMap rk replSet
+    fullMap :: Fix (Tree23 (Map Int String))
+    fullMap = foldr (uncurry insertMap) empty23 ins
+    replMap = insertMap rk rv' $ insertMap rk rv fullMap
+    replTest = Just rv' == lookupMap rk replMap
 
 prop_MapDeleteAll :: [(Int,String)] -> Bool
 prop_MapDeleteAll xs = allDeleted where
-    fullSet = foldr (uncurry insertMap)
-        (empty :: Tree23 Fix (Map Int String)) xs
-    delSet = foldr deleteMap fullSet $ fmap fst xs
+    fullMap :: Fix (Tree23 (Map Int String))
+    fullMap = fromListMap xs
+    delSet = foldr deleteMap fullMap $ fmap fst xs
     allDeleted = [] == toListMap delSet
 
 prop_MapPartition :: [(Int, String)] -> Int -> Bool
 prop_MapPartition xs i = parted where
-    fullMap = fromListMap xs :: Tree23 Fix (Map Int String)
+    fullMap = fromListMap xs :: Fix (Tree23 (Map Int String))
     (ltMap', gteMap') = partitionMap i fullMap
     ltMap = fmap fst $ toListMap ltMap'
     gteMap = fmap fst $ toListMap gteMap'
@@ -73,10 +75,11 @@ prop_MapPartition xs i = parted where
 
 prop_MapMap :: [(Int,String)] -> String -> Bool
 prop_MapMap xs pre = allMap where
-    empt = empty :: Tree23 Fix (Map Int String)
-    fullMap = foldr (uncurry insertMap) empt xs
+    fullMap :: Fix (Tree23 (Map Int String))
+    fullMap = foldr (uncurry insertMap) empty23 xs
     pl = length pre
-    mapped = mapMap (pre ++) fullMap :: Tree23 Fix (Map Int String)
+    mapped :: Fix (Tree23 (Map Int String))
+    mapped = mapMap (pre ++) fullMap
     keys = fmap fst xs
     allMap = all ((Just pre ==) . fmap (take pl) . flip lookupMap mapped) keys 
 
