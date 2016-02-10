@@ -63,6 +63,7 @@ module Data.FixFile (
                      ,readTransaction
                      ,writeTransaction
                      ,subTransaction
+                     ,getRoot
                      ,getFull
                      ) where
 
@@ -454,6 +455,13 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
             Just root'' -> do
                 void $ swapMVar ffhmv (ffh, root'')
         return a
+
+
+{- |
+    Get the root datastructure from the transaction as @r 'Fix'@.
+-}
+getRoot :: Root r => Transaction r s (r Fix)
+getRoot = rootIso <$> RWS.get
 
 {- |
     Get the full datastructure from the transaction as a @'Fix' f@.
