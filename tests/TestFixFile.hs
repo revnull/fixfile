@@ -26,6 +26,7 @@ import Data.Maybe
 import Control.Lens
 import Control.Concurrent
 import Control.Concurrent.MVar
+import Control.Monad.Except
 import System.Timeout
 
 data TestRoot g =
@@ -145,6 +146,32 @@ prop_OpenClose xs = monadicIO testOpenClose where
         assert res2
             
 
+prop_Except :: [(Int, String)] -> (Int, String) -> Property
+prop_Except xs (nk, nv) = monadicIO testExcept where
+    testExcept = do
+        (res1, res2) <- withTestFile $ \f h -> do
+            ff <- createFixFileHandle emptyTR f h
+            forM_ xs $ \(k, v) -> writeTransaction ff $ do
+                when (k /= nk) $ subTransaction tr1 $
+                    insertMapT k v
+                when (v /= nv) $ subTransaction tr2 $
+                    insertSetT v
+            writeExceptTransaction ff $ do
+                lift $ subTransaction tr1 $ insertMapT nk nv
+                throwError ()
+            writeExceptTransaction ff $ do
+                lift $ subTransaction tr2 $ insertSetT nv
+                throwError ()
+            res1 <- readTransaction ff $
+                subTransaction tr1 $ lookupMapT nk
+            res2 <- readTransaction ff $
+                subTransaction tr2 $ lookupSetT nv
+            res1' <- evaluate $ isNothing res1
+            res2' <- evaluate $ not res2
+            return (res1', res2')
+        assert res1
+        assert res2
+
 prop_Concurrent :: [(Int, String)] -> [(Int, String)] -> Property
 prop_Concurrent xs repls = monadicIO testCon where
     cleanRepl = toListMap $ (fromListMap repls :: Fix (Tree23 (Map Int String)))
@@ -208,5 +235,6 @@ testFixFile = testGroup "FixFile"
        ,testProperty "Vacuum" prop_Vacuum
        ,testProperty "Delete" prop_FileDelete
        ,testProperty "Open/Close" prop_OpenClose
+       ,testProperty "Except" prop_Except
        ,testProperty "Concurrent" prop_Concurrent
     ]

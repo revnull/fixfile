@@ -62,6 +62,7 @@ module Data.FixFile (
                      ,lookupT
                      ,readTransaction
                      ,writeTransaction
+                     ,writeExceptTransaction
                      ,subTransaction
                      ,getRoot
                      ,getFull
@@ -72,9 +73,8 @@ import Prelude hiding (sequence, mapM, lookup)
 import Control.Concurrent.MVar
 import Control.Exception
 import Control.Lens hiding (iso, para)
+import Control.Monad.Except
 import qualified Control.Monad.RWS as RWS
-import Control.Monad.Identity hiding (mapM)
-import Control.Monad.Trans
 import Data.Binary
 import Data.ByteString.Lazy as BSL
 import Data.Dynamic
@@ -83,7 +83,6 @@ import Data.HashTable.IO
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
-import Data.Traversable (mapM)
 import GHC.Generics
 import System.FilePath
 import System.Directory
@@ -454,6 +453,27 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
             Nothing -> return ()
             Just root'' -> do
                 void $ swapMVar ffhmv (ffh, root'')
+        return a
+
+writeExceptTransaction :: (Root r, Binary (r Ptr), Typeable r) => 
+    FixFile r -> (forall s. ExceptT e (Transaction r s) a)
+    -> IO (Either e a)
+writeExceptTransaction ff@(FixFile _ ffhmv _) t = res where
+    res = withWriteLock ff runTransaction
+    runTransaction = do
+        (ffh, root) <- readMVar ffhmv
+        let t' = readRoot root >>= RWS.put >> runExceptT t >>= save
+            save l@(Left _) = return l
+            save r@(Right _) = do
+                dr <- RWS.get >>= writeRoot
+                (withHandle $ putRawBlock dr) >>= updateHeader
+                Transaction . RWS.tell . Last . Just $ dr
+                return r
+        (a, root') <- RWS.evalRWST (runRT t') ffh undefined
+        case (a, getLast root') of
+            (Right _, Just root'') -> do
+                void $ swapMVar ffhmv (ffh, root'')
+            _ -> return ()
         return a
 
 
