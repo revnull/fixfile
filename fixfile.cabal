@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                   fixfile
-version:                0.1.0.0
+version:                0.2.0.0
 synopsis:               File-backed recursive data structures.
 homepage:               https://github.com/revnull/fixfile
 license:                LGPL-3
@@ -35,6 +35,7 @@ library
                        ,hashtables
                        ,containers
                        ,lens
+                       ,vector
   hs-source-dirs:       src
   default-language:     Haskell2010
   exposed-modules:      Data.FixFile
