@@ -29,6 +29,7 @@ module Data.FixFile.Set (Set
                          ,toListSetT
                          ) where
 
+
 import Prelude hiding (lookup)
 
 import Data.Binary
@@ -39,6 +40,8 @@ import Data.FixFile
 {- |
     A 'Fixed' @('Set' i)@ is a set of items represented as a binary tree.
 -}
+{-# WARNING Set "Set is unbalanced and not recommended." #-}
+
 data Set i a = Empty | Node a i a
     deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
