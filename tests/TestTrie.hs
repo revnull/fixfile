@@ -39,21 +39,16 @@ prop_TrieThaw xs ys = allIns where
     keys = fmap fst $ xs ++ ys
     allIns = all (isJust . flip lookupTrie fullSet) keys
 
-prop_TrieDelete :: [(BS.ByteString, Int)] -> [BS.ByteString] -> 
-    [BS.ByteString] -> Bool
+prop_TrieDelete :: [(BS.ByteString, Int)] -> BS.ByteString -> 
+    BS.ByteString -> Bool
 prop_TrieDelete ins pre del = allDels where
     empt = empty :: Fix (Trie Int)
-    insJoin = do
-        p <- pre
-        (ik, iv) <- ins
-        return (BS.append p ik, iv)
-    delJoin = do
-        p <- pre
-        dk <- del
-        return (BS.append p dk)
-    fullSet = foldr (uncurry insertTrie) empt insJoin
-    delSet = foldr deleteTrie fullSet delJoin
-    allDels = all (isNothing . flip lookupTrie delSet) delJoin
+    pres = [(BS.append pre ik, iv) | (ik,iv) <- ins]
+    dels = [(BS.append del ik, iv) | (ik,iv) <- ins]
+    delks = fmap fst dels
+    fullTrie = foldr (uncurry insertTrie) empt (pres ++ dels)
+    delSet = foldr deleteTrie fullTrie delks
+    allDels = all (isNothing . flip lookupTrie delSet) delks
 
 prop_TrieDeleteAll :: [(BS.ByteString, Int)] -> Bool
 prop_TrieDeleteAll xs = allDels where
