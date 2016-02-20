@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables, RankNTypes, KindSignatures,
     MultiParamTypeClasses, FlexibleInstances, FlexibleContexts,
     FunctionalDependencies, TypeFamilies, UndecidableInstances,
-    DeriveDataTypeable, DeriveGeneric #-}
+    DeriveDataTypeable, DeriveGeneric, ConstraintKinds #-}
 
 {- |
     
@@ -44,7 +44,8 @@ module Data.FixFile (
                      ,para
                      ,iso
                      -- * Root Data
-                     ,Root(..)
+                     ,FixTraverse(..)
+                     ,Root
                      ,Ptr
                      ,Ref(..)
                      ,ref
@@ -219,25 +220,37 @@ instance Binary (Ptr f)
 instance Hashable (Ptr f) where
     hashWithSalt x (Ptr y) = hashWithSalt x y
 
+type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f)
+
 {- |
-    A 'Root' datastructure acts as a kind of header that can contain one or
-    more 'Ref's to different recursive structures. It takes one argument,
-    which has the kind of @((* -> *) -> *)@. This argument should be either an
-    instance of 'Fixed' or a 'Ptr'. If it is an instance of 'Fixed', then
-    the 'Root' can contain recursive data structures. If it is passed 'Ptr'
-    as an argument, then the 'Root' will contain a non-recursive structure,
-    but can be serialized.
-
+    'FixTraverse' is a class based on 'Traverse' but taking an argument of kind
+    @(* -> *) -> *)@ instead of @*@.
 -}
-class Root (r :: (((* -> *) -> *) -> *)) where
-    -- | Deserialize @'r' 'Ptr'@ inside a 'Transaction'.
-    readRoot :: r Ptr -> Transaction r' s (r (Stored s))
-    -- | Serialize @'r' 'Ptr'@ inside a 'Transaction'. This will result in
-    -- | changes to any recursive structures to be written as well.
-    writeRoot :: r (Stored s) -> Transaction r' s (r Ptr)
+class FixTraverse (t :: ((* -> *) -> *) -> *) where
+    -- | Given a function that maps from @a@ to @b@ over @'Fixable' g@ in the
+    -- | 'Applicative' @f@, traverse over @t@ changing the fixed-point
+    -- | combinator from @a@ to @b@.
+    sequenceAFix :: Applicative f =>
+        (forall g. Fixable g => a g -> f (b g)) -> t a -> f (t b)
 
-    -- | 'iso', but applied to an instance of 'Root'.
-    rootIso :: (Fixed g, Fixed h) => r g -> r h
+{- | 
+    A 'Root' is a datastructure that is an instance of 'FixTraverse' and
+    'Binary'. This acts as a sort of "header" for the file where the 'Root'
+    may have several 'Ref's under it to different 'Functors'.
+-}
+
+type Root r = (FixTraverse r, Binary (r Ptr))
+
+readRoot :: Root r => r Ptr -> Transaction r' s (r (Stored s))
+readRoot = sequenceAFix readPtr where
+    readPtr p = withHandle $ flip readStoredLazy p
+
+writeRoot :: Root r => r (Stored s) -> Transaction r' s (r Ptr)
+writeRoot = sequenceAFix writeStored where
+    writeStored s = withHandle $ flip sync s
+
+rootIso :: (Root r, Fixed g, Fixed h) => r g -> r h
+rootIso = runIdentity . sequenceAFix (Identity . iso)
 
 {- |
     A 'Ref' is a reference to a 'Functor' 'f' in the 'Fixed' instance of 'g'.
@@ -248,12 +261,10 @@ class Root (r :: (((* -> *) -> *) -> *)) where
 data Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
     deriving (Generic)
 
-instance (Typeable f, Binary (f (Ptr f)), Traversable f) => Root (Ref f) where
-    readRoot (Ref p) = Ref <$> (withHandle $ flip readStoredLazy p)
-    writeRoot (Ref a) = Ref <$> (withHandle $ flip sync a)
-    rootIso = Ref . iso . deRef
-
 instance Binary (Ref f Ptr)
+
+instance Fixable f => FixTraverse (Ref f) where
+    sequenceAFix isoT (Ref a) = Ref <$> isoT a
 
 -- | Lens for accessing the value stored in a Ref
 ref :: Lens' (Ref f g) (g f)
@@ -361,8 +372,7 @@ updateHeader p = do
     Create a 'FixFile', using @'Fix' f@ as the initial structure to store
     at the location described by 'FilePath'.
 -}
-createFixFile :: (Root r, Binary (r Ptr), Typeable r) =>
-    r Fix -> FilePath -> IO (FixFile r)
+createFixFile :: Root r => r Fix -> FilePath -> IO (FixFile r)
 createFixFile initial path =
     openFile path ReadWriteMode >>= createFixFileHandle initial path
 
@@ -371,7 +381,7 @@ createFixFile initial path =
     at the location described by 'FilePath' and using the 'Handle' to the
     file to be created.
 -}
-createFixFileHandle :: (Root r, Binary (r Ptr), Typeable r) =>
+createFixFileHandle :: Root r =>
     r Fix -> FilePath -> Handle -> IO (FixFile r)
 createFixFileHandle initial path h = do
     ffh <- FFH <$> newMVar h <*> newMVar M.empty
@@ -435,7 +445,7 @@ readTransaction (FixFile _ ffhmv _) t = do
     the readTransaction in that the root object stored in the file can
     potentially be updated by this 'Transaction'.
 -}
-writeTransaction :: (Root r, Binary (r Ptr), Typeable r) => 
+writeTransaction :: Root r => 
     FixFile r -> (forall s. Transaction r s a)
     -> IO a
 writeTransaction ff@(FixFile _ ffhmv _) t = res where
@@ -455,7 +465,15 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
                 void $ swapMVar ffhmv (ffh, root'')
         return a
 
-writeExceptTransaction :: (Root r, Binary (r Ptr), Typeable r) => 
+{- |
+    The 'writeExceptTransaction' function behaves like 'writeTransaction', but
+    applies to a 'Transaction' wrapped in 'ExceptT'. In the event that an
+    exception propagates through the 'Transaction', the updates are not
+    committed to disk.
+
+    This is meant to provide a mechanism for aborting 'Transaction's.
+-}
+writeExceptTransaction :: Root r => 
     FixFile r -> (forall s. ExceptT e (Transaction r s) a)
     -> IO (Either e a)
 writeExceptTransaction ff@(FixFile _ ffhmv _) t = res where
@@ -498,8 +516,7 @@ getFull = uses ref iso
     The memory usage of this operation scales with the recursive depth of the
     structure stored in the file.
 -}
-vacuum :: (Root r, Binary (r Ptr), Typeable r) =>
-    FixFile r -> IO ()
+vacuum :: Root r => FixFile r -> IO ()
 vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
     runVacuum = do
         mval <- takeMVar mv

@@ -35,10 +35,9 @@ data TestRoot g =
 
 instance Binary (TestRoot Ptr)
 
-instance Root (TestRoot) where
-    readRoot (TR a b) = TR <$> readRoot a <*> readRoot b
-    writeRoot (TR a b) = TR <$> writeRoot a <*> writeRoot b
-    rootIso (TR a b) = TR (rootIso a) (rootIso b)
+instance FixTraverse TestRoot where
+    sequenceAFix isoT (TR a b) =
+        TR <$> sequenceAFix isoT a <*> sequenceAFix isoT b
 
 emptyTR :: TestRoot Fix
 emptyTR = TR (Ref empty) (Ref empty)
