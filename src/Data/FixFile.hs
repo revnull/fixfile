@@ -20,7 +20,7 @@
     Transactions are used to ensure safety of the unsafe IO.
 
     The data structures used by a 'FixFile' should not be recursive directly,
-    but should have instances of 'Foldable', 'Traversable', and 'Binary' and
+    but should have instances of 'Typeable', 'Traversable', and 'Binary' and
     should be structured such that the fixed point of the data type is
     recursive.
 
@@ -44,6 +44,7 @@ module Data.FixFile (
                      ,para
                      ,iso
                      -- * Root Data
+                     ,Fixable
                      ,FixTraverse(..)
                      ,Root
                      ,Ptr
@@ -220,6 +221,7 @@ instance Binary (Ptr f)
 instance Hashable (Ptr f) where
     hashWithSalt x (Ptr y) = hashWithSalt x y
 
+-- | A Constraint for data that can be used with a 'Ref'
 type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f)
 
 {- |
@@ -228,8 +230,8 @@ type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f)
 -}
 class FixTraverse (t :: ((* -> *) -> *) -> *) where
     -- | Given a function that maps from @a@ to @b@ over @'Fixable' g@ in the
-    -- | 'Applicative' @f@, traverse over @t@ changing the fixed-point
-    -- | combinator from @a@ to @b@.
+    --   'Applicative' @f@, traverse over @t@ changing the fixed-point
+    --   combinator from @a@ to @b@.
     sequenceAFix :: Applicative f =>
         (forall g. Fixable g => a g -> f (b g)) -> t a -> f (t b)
 
