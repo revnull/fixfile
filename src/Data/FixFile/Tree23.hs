@@ -26,12 +26,16 @@ module Data.FixFile.Tree23 (Tree23
                            ,lookupSet
                            ,deleteSet
                            ,partitionSet
+                           ,minSet
+                           ,maxSet
                            ,toListSet
                            ,fromListSet
                            ,insertSetT
                            ,lookupSetT
                            ,deleteSetT
                            ,partitionSetT
+                           ,minSetT
+                           ,maxSetT
                            -- | * Map
                            ,Map
                            ,createMapFile
@@ -42,6 +46,8 @@ module Data.FixFile.Tree23 (Tree23
                            ,partitionMap
                            ,alterMap
                            ,mapMap
+                           ,minMap
+                           ,maxMap
                            ,toListMap
                            ,fromListMap
                            ,insertMapT
@@ -49,6 +55,8 @@ module Data.FixFile.Tree23 (Tree23
                            ,deleteMapT
                            ,partitionMapT
                            ,alterMapT
+                           ,minMapT
+                           ,maxMapT
                            ,keysMap
                            ,valuesMap
                            ,partitionTree23
@@ -153,6 +161,18 @@ deleteSet k = alterTree23 (SK k) (const $ Just Nothing)
 partitionSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => k -> g f -> (g f, g f)
 partitionSet k = partitionTree23 (SK k)
 
+-- | return the minimum value
+minSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => g f -> Maybe k
+minSet t = do
+    (SK v, _) <- minTree23 t
+    return v
+
+-- | return the minimum value
+maxSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => g f -> Maybe k
+maxSet t = do
+    (SK v, _) <- maxTree23 t
+    return v
+
 -- | Convert a set into a list of items.
 toListSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => g f -> [k]
 toListSet = ($ []) . cata phi where
@@ -194,6 +214,16 @@ deleteSetT k = alterT (deleteSet k)
 partitionSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) => k ->
     Transaction (Ref f) s (Stored s f, Stored s f)
 partitionSetT k = lookupT (partitionSet k)
+
+-- | 'FTransaction' version of 'minSet'.
+minSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+    Transaction (Ref f) s (Maybe k)
+minSetT = lookupT minSet
+
+-- | 'FTransaction' version of 'minSet'.
+maxSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+    Transaction (Ref f) s (Maybe k)
+maxSetT = lookupT maxSet
 
 -- | A 'Map' of keys 'k' to values 'v' represented as a Two-Three Tree.
 data Map k v
@@ -253,6 +283,18 @@ keysMap = fmap fst . toListMap
 valuesMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> [v]
 valuesMap = fmap snd . toListMap
 
+-- | return the minimum key and value
+minMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> Maybe (k, v)
+minMap t = do
+    (MK k, MV v) <- minTree23 t
+    return (k, v)
+
+-- | return the maximum key and value
+maxMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> Maybe (k, v)
+maxMap t = do
+    (MK k, MV v) <- maxTree23 t
+    return (k, v)
+
 -- | Map a function over a map. Because of the way Tree23 is implemented, it is
 --   not possible to create a Functor instance to achieve this.
 mapMap :: (Fixed g, Fixed h, Ord k) => (a -> b) -> g (Tree23 (Map k a)) ->
@@ -299,6 +341,16 @@ partitionMapT k = lookupT (partitionMap k)
 alterMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
     k -> (Maybe v -> Maybe v) -> Transaction (Ref f) s ()
 alterMapT k f = alterT (alterMap k f)
+
+-- | 'FTransaction' version of 'minMap'.
+minMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+    Transaction (Ref f) s (Maybe (k, v))
+minMapT = lookupT minMap
+
+-- | 'FTransaction' version of 'minMap'.
+maxMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+    Transaction (Ref f) s (Maybe (k, v))
+maxMapT = lookupT maxMap
 
 -- lookup the value (if it exists) from a Fixed Tree23 for a given key.
 lookupTree23 :: (Fixed g, Ord (TreeKey d)) => TreeKey d ->
@@ -514,4 +566,19 @@ partitionTree23 k t = resp $ para phi t where
             Split2 (lbal, lv) (rbal, rv) ->
                 Split2 (lbal -1, lv) (merge rbal rv k2 0 (two mn k2 rn))
             _ -> error "Malformed Tree23"
+
+
+minTree23 :: Fixed g => g (Tree23 d) -> Maybe (TreeKey d, TreeValue d)
+minTree23 = cata phi where
+    phi Empty = Nothing
+    phi (Leaf k v) = Just (k, v)
+    phi (Two l _ _) = l
+    phi (Three l _ _ _ _) = l
+
+maxTree23 :: Fixed g => g (Tree23 d) -> Maybe (TreeKey d, TreeValue d)
+maxTree23 = cata phi where
+    phi Empty = Nothing
+    phi (Leaf k v) = Just (k, v)
+    phi (Two _ _ r) = r
+    phi (Three _ _ _ _ r) = r 
 

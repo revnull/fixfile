@@ -38,6 +38,16 @@ prop_SetPartition xs i = parted where
     gteSet = toListSet gteSet'
     parted = all (< i) ltSet && all (>= i) gteSet
 
+prop_SetMinMax :: [Int] -> Int -> Bool
+prop_SetMinMax xs' i = minMax where
+    xs = i:xs'
+    minxs = minimum xs
+    maxxs = maximum xs
+    fullSet = fromListSet xs :: Fix (Tree23 (Set Int))
+    Just minxs' = minSet fullSet
+    Just maxxs' = maxSet fullSet
+    minMax = minxs == minxs' && maxxs == maxxs'
+
 prop_MapInsert :: [(Int,String)] -> Bool
 prop_MapInsert xs = allIns where
     empt = empty :: Fix (Tree23 (Map Int String))
@@ -83,6 +93,18 @@ prop_MapMap xs pre = allMap where
     keys = fmap fst xs
     allMap = all ((Just pre ==) . fmap (take pl) . flip lookupMap mapped) keys 
 
+prop_MapMinMax :: [(Int, String)] -> (Int, String) -> Bool
+prop_MapMinMax xs'' i = minMax where
+    xs' = i:xs''
+    fullMap = fromListMap xs' :: Fix (Tree23 (Map Int String))
+    xs = toListMap fullMap
+    minxs = minimum xs
+    maxxs = maximum xs
+    Just minxs' = minMap fullMap
+    Just maxxs' = maxMap fullMap
+    minMax = minxs == minxs' && maxxs == maxxs'
+       
+
 test23 = testGroup "Tree23"
     [
         testGroup "Set"
@@ -91,6 +113,7 @@ test23 = testGroup "Tree23"
            ,testProperty "Set Delete" prop_SetDelete
            ,testProperty "Set Delete All" prop_SetDeleteAll
            ,testProperty "Set Partition" prop_SetPartition
+           ,testProperty "Set Min/Max" prop_SetMinMax
         ]
        ,testGroup "Map"
        [
