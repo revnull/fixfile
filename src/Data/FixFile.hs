@@ -57,6 +57,7 @@ module Data.FixFile (
                      ,openFixFile
                      ,openFixFileHandle
                      ,closeFixFile
+                     ,fixFilePath
                      ,vacuum
                      -- * Transactions
                      ,Transaction
@@ -343,6 +344,10 @@ lookupT f = f <$> use ref
     structure. 'r' is the 'Root' object stored in the 'FixFile'.
 -}
 data FixFile r = FixFile FilePath (MVar (FFH, r Ptr)) (MVar ())
+
+-- | Get the 'FilePath' of a 'FixFile'.
+fixFilePath :: FixFile r -> FilePath
+fixFilePath (FixFile p _ _) = p
 
 acquireWriteLock :: FixFile f -> IO ()
 acquireWriteLock (FixFile _ _ wl) = do
