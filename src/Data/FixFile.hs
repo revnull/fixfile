@@ -381,7 +381,7 @@ updateHeader p = do
 -}
 createFixFile :: Root r => r Fix -> FilePath -> IO (FixFile r)
 createFixFile initial path =
-    openFile path ReadWriteMode >>= createFixFileHandle initial path
+    openBinaryFile path ReadWriteMode >>= createFixFileHandle initial path
 
 {- |
     Create a 'FixFile', using @'Fix' f@ as the initial structure to store
@@ -407,7 +407,7 @@ createFixFileHandle initial path h = do
 -}
 openFixFile :: Binary (r Ptr) => FilePath -> IO (FixFile r)
 openFixFile path =
-    openFile path ReadWriteMode >>= openFixFileHandle path
+    openBinaryFile path ReadWriteMode >>= openFixFileHandle path
 
 {- |
     Open a 'FixFile' from the file described by 'FilePath' and using the
