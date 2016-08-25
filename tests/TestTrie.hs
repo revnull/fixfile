@@ -77,28 +77,39 @@ prop_TrieIterate xs pre = allIter where
     allIter = all (isJust . flip lookup ins) $ fmap fst iter
 
 prop_TrieFunctor :: [(BS.ByteString, String)] -> Bool
-prop_TrieFunctor xs = xs'' == iterateTrie BS.empty trie' where
+prop_TrieFunctor xs = testAll where
+    testAll = xs'' == iterateTrie BS.empty trie' &&
+        xs'' == iterateTrie BS.empty frozenTrie'
     xs' = nubBy ((==) `on` fst) $ sortBy (compare `on` fst) xs
     xs'' = fmap (fmap length) xs'
     trie = foldr (uncurry insertTrie) empty xs' :: Fix (Trie String)
     trie' = fmapF' length trie
+    frozenTrie' = fmapF' length (freeze trie)
 
 prop_TrieFoldable :: [(BS.ByteString, Int)] -> Bool
-prop_TrieFoldable xs = listSum == trieSum where
+prop_TrieFoldable xs = testAll where
+    testAll = listSum == trieSum && listSum == frozenTrieSum
     xs' = nubBy ((==) `on` fst) $ sortBy (compare `on` fst) xs
     listSum = getSum $ foldMap (Sum . snd) xs'
     trie = foldr (uncurry insertTrie) empty xs' :: Fix (Trie Int)
     trieSum = getSum $ foldMapF Sum trie
+    frozenTrieSum = getSum $ foldMapF Sum (freeze trie)
 
 prop_TrieTraversable :: [(BS.ByteString, Int)] -> Bool
-prop_TrieTraversable xs = testEvens evens'' && testOdds odds'' where
+prop_TrieTraversable xs = testAll where
+    testAll = testEvens evens'' && testOdds odds'' &&
+        testEvens frozenEvens'' && testOdds frozenOdds''
     evens = filter (even . snd) xs
     odds = filter (odd . snd) xs
     evens' = foldr (uncurry insertTrie) empty evens :: Fix (Trie Int)
     odds' = foldr (uncurry insertTrie) empty odds :: Fix (Trie Int)
+    frozenEvens' = freeze evens'
+    frozenOdds' = freeze odds'
     f x = if even x then Nothing else Just x
     evens'' = traverseF' f evens'
     odds'' = traverseF' f odds'
+    frozenEvens'' = traverseF' f frozenEvens'
+    frozenOdds'' = traverseF' f frozenOdds'
     testEvens Nothing = True
     testEvens _ = null evens
     testOdds Nothing = False
