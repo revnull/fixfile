@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
-    DeriveDataTypeable, DataKinds, KindSignatures #-}
+    DeriveDataTypeable, DataKinds, KindSignatures, TypeFamilies,
+    TupleSections #-}
 
 {- |
     Module      :  Data.FixFile.BTree
@@ -319,4 +320,28 @@ toListBTree t = cata phi t Nothing [] where
 -- | Turn a list of key value tuples into a 'Fixed' @('BTree' k v)@.
 fromListBTree :: (KnownNat n, Ord k, Fixed g) => [(k,v)] -> g (BTree n k v)
 fromListBTree = foldr (uncurry insertBTree) empty
+
+instance FixedAlg (BTree n k v) where
+    type Alg (BTree n k v) = v
+
+instance FixedSub (BTree n k v) where
+    type Sub (BTree n k v) v v' = BTree n k v'
+
+instance FixedFunctor (BTree n k v) where
+    fmapF f = cata phi where
+        phi Empty = empty
+        phi (Value v) = value (f v)
+        phi (Node c vec) = node c vec
+
+instance FixedFoldable (BTree n k v) where
+    foldMapF f = cata phi where
+        phi Empty = mempty
+        phi (Value v) = f v
+        phi (Node _ vec) = foldMap snd vec
+
+instance FixedTraversable (BTree n k v) where
+    traverseF f = cata phi where
+        phi Empty = pure empty
+        phi (Value v) = value <$> f v
+        phi (Node c vec) = node c <$> traverse (\(w, a) -> (w,) <$> a) vec 
 

@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
-    TypeFamilies, DeriveDataTypeable #-}
+    TypeFamilies, DeriveDataTypeable, TupleSections #-}
 
 {- |
     Module      :  Data.FixFile.Trie
@@ -25,7 +25,6 @@ module Data.FixFile.Trie (Trie
                          ,deleteTrieT
                          ,iterateTrie
                          ,iterateTrieT
-                         ,trieMap
                          ) where
 
 import Prelude hiding (tail)
@@ -38,6 +37,7 @@ import qualified Data.ByteString.Lazy as BS
 import Data.Dynamic
 import qualified Data.Map as M
 import Data.Maybe
+import Data.Monoid
 import GHC.Generics
 
 import Data.FixFile
@@ -336,14 +336,39 @@ iterateTrieT :: Binary v => BS.ByteString ->
     Transaction (Ref (Trie v)) s [(BS.ByteString, v)]
 iterateTrieT k = lookupT (iterateTrie k)
 
--- | Map a function over a 'Fixed' 'Trie'. Because of the data types used,
---   this can't be implemented as a 'Functor'.
-trieMap :: (Fixed h, Fixed i) => (v -> v') -> h (Trie v) -> i (Trie v')
-trieMap f = cata phi where
-    phi (Value v) = value (f v)
-    phi (Tail v) = tail v
-    phi (String v b t) = string v b t
-    phi (Small v ts) = small v ts
-    phi (Big v ts) = big v ts
-    phi (Mutable v ts) = mut v ts
+instance FixedAlg (Trie v) where
+    type Alg (Trie v) = v
+
+instance FixedSub (Trie v) where
+    type Sub (Trie v) v v' = Trie v'
+
+instance FixedFunctor (Trie v) where
+    fmapF f = cata phi where
+        phi (Value v) = value (f v)
+        phi (Tail v) = tail v
+        phi (String v b t) = string v b t
+        phi (Small v ts) = small v ts
+        phi (Big v ts) = big v ts
+        phi (Mutable v ts) = mut v ts
+
+instance FixedFoldable (Trie v) where
+    foldMapF f = maybe mempty id . cata phi where
+        phi (Value v) = Just (f v)
+        phi (Tail v) = join v
+        phi (String v _ t) = join v <> t
+        phi (Small v l) = join v <> mconcat (snd <$> l)
+        phi (Big v a) = join v <> mconcat (join <$> elems a)
+        phi (Mutable v m) = join v <> foldMap id m
+
+instance FixedTraversable (Trie v) where
+    traverseF f = cata phi where
+        mapply Nothing = pure Nothing
+        mapply (Just v) = Just <$> v
+        phi (Value v) = value <$> f v
+        phi (Tail v) = tail <$> mapply v
+        phi (String v b a) = string <$> mapply v <*> pure b <*> a
+        phi (Small v l) = small <$> mapply v <*>
+            traverse (\(w, a) -> (w,) <$> a) l
+        phi (Big v a) = big <$> mapply v <*> traverse mapply a
+        phi (Mutable v m) = mut <$> mapply v <*> traverse id m
 

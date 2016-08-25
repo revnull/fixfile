@@ -2,6 +2,10 @@
 
 module TestBTree(testBTree) where
 
+import Data.Function
+import Data.List
+import Data.Monoid
+
 import Test.Tasty
 import Test.Tasty.QuickCheck
 import Test.QuickCheck
@@ -63,6 +67,30 @@ prop_BTreeNodeSize xs = depth fullSet1 >= depth fullSet2 where
     fullSet1 = foldr (uncurry insertBTree) empt1 xs
     fullSet2 = foldr (uncurry insertBTree) empt2 xs
 
+prop_BTreeFunctor :: [String] -> Bool
+prop_BTreeFunctor xs = testList == toListBTree bt' where
+    xs' = zip xs xs
+    testList = fmap (fmap length) $ sortBy (compare `on` fst) xs'
+    bt' = fmapF' length (fromListBTree xs') :: Fix (BTree 3 String Int)
+
+prop_BTreeFoldable :: [(Int, Int)] -> Bool
+prop_BTreeFoldable xs = listSum == btreeSum where
+    listSum = getSum $ foldMap (Sum . snd) xs
+    bt = fromListBTree xs :: Fix (BTree 3 Int Int)
+    btreeSum = getSum $ foldMapF Sum bt
+
+prop_BTreeTraversable :: [(Int, Int)] -> Bool
+prop_BTreeTraversable xs = testEvens evens' && testOdds odds' where
+    odds = fromListBTree $ filter (odd . snd) xs :: Fix (BTree 3 Int Int)
+    evens = fromListBTree $ filter (even . snd) xs :: Fix (BTree 3 Int Int)
+    f x = if even x then Nothing else Just x
+    odds' = toListBTree <$> traverseF' f odds
+    evens' = toListBTree <$> traverseF' f evens
+    testEvens Nothing = True
+    testEvens (Just l) = null l
+    testOdds Nothing = False
+    testOdds _ = True
+
 testBTree = testGroup "BTree"
     [
         testProperty "BTree Insert" prop_BTreeInsert
@@ -71,4 +99,7 @@ testBTree = testGroup "BTree"
        ,testProperty "BTree Filter" prop_BTreeFilter
        ,testProperty "BTree Partition" prop_BTreePartition
        ,testProperty "BTree Node Size" prop_BTreeNodeSize
+       ,testProperty "BTree Functor" prop_BTreeFunctor
+       ,testProperty "BTree Foldable" prop_BTreeFoldable
+       ,testProperty "BTree Traversable" prop_BTreeTraversable
     ]

@@ -10,7 +10,10 @@ import Data.FixFile
 import Data.FixFile.Trie
 
 import qualified Data.ByteString.Lazy as BS
+import Data.Function
+import Data.List
 import Data.Maybe
+import Data.Monoid
 import Control.Applicative hiding (empty)
 
 instance Arbitrary BS.ByteString where
@@ -73,6 +76,34 @@ prop_TrieIterate xs pre = allIter where
     iter = iterateTrie pre fullSet
     allIter = all (isJust . flip lookup ins) $ fmap fst iter
 
+prop_TrieFunctor :: [(BS.ByteString, String)] -> Bool
+prop_TrieFunctor xs = xs'' == iterateTrie BS.empty trie' where
+    xs' = nubBy ((==) `on` fst) $ sortBy (compare `on` fst) xs
+    xs'' = fmap (fmap length) xs'
+    trie = foldr (uncurry insertTrie) empty xs' :: Fix (Trie String)
+    trie' = fmapF' length trie
+
+prop_TrieFoldable :: [(BS.ByteString, Int)] -> Bool
+prop_TrieFoldable xs = listSum == trieSum where
+    xs' = nubBy ((==) `on` fst) $ sortBy (compare `on` fst) xs
+    listSum = getSum $ foldMap (Sum . snd) xs'
+    trie = foldr (uncurry insertTrie) empty xs' :: Fix (Trie Int)
+    trieSum = getSum $ foldMapF Sum trie
+
+prop_TrieTraversable :: [(BS.ByteString, Int)] -> Bool
+prop_TrieTraversable xs = testEvens evens'' && testOdds odds'' where
+    evens = filter (even . snd) xs
+    odds = filter (odd . snd) xs
+    evens' = foldr (uncurry insertTrie) empty evens :: Fix (Trie Int)
+    odds' = foldr (uncurry insertTrie) empty odds :: Fix (Trie Int)
+    f x = if even x then Nothing else Just x
+    evens'' = traverseF' f evens'
+    odds'' = traverseF' f odds'
+    testEvens Nothing = True
+    testEvens _ = null evens
+    testOdds Nothing = False
+    testOdds _ = True
+
 testTrie = testGroup "Trie"
     [
         testProperty "Trie Insert" prop_TrieInsert
@@ -82,4 +113,7 @@ testTrie = testGroup "Trie"
        ,testProperty "Trie Delete All" prop_TrieDeleteAll
        ,testProperty "Trie Replace" prop_TrieReplace
        ,testProperty "Trie Iterate" prop_TrieIterate
+       ,testProperty "Trie Functor" prop_TrieFunctor
+       ,testProperty "Trie Foldable" prop_TrieFoldable
+       ,testProperty "Trie Traversable" prop_TrieTraversable
     ]

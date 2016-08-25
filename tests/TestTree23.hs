@@ -6,9 +6,11 @@ import Test.Tasty.QuickCheck
 import Test.QuickCheck
 
 import Data.FixFile
-import Data.FixFile.Tree23
+import Data.FixFile.Tree23 as Tree23
 
+import Data.List
 import Data.Maybe
+import Data.Monoid
 
 empty23 :: Fix (Tree23 d)
 empty23 = empty
@@ -48,6 +50,12 @@ prop_SetMinMax xs' i = minMax where
     Just maxxs' = maxSet fullSet
     minMax = minxs == minxs' && maxxs == maxxs'
 
+prop_SetFoldable :: [Int] -> Bool
+prop_SetFoldable xs = setSum == listSum where
+    fullSet = fromListSet xs :: Fix (Tree23 (Set Int))
+    setSum = getSum $ foldMapF Sum fullSet
+    listSum = getSum $ foldMap Sum (nub xs)
+
 prop_MapInsert :: [(Int,String)] -> Bool
 prop_MapInsert xs = allIns where
     empt = empty :: Fix (Tree23 (Map Int String))
@@ -83,13 +91,13 @@ prop_MapPartition xs i = parted where
     gteMap = fmap fst $ toListMap gteMap'
     parted = all (< i) ltMap && all (>= i) gteMap
 
-prop_MapMap :: [(Int,String)] -> String -> Bool
-prop_MapMap xs pre = allMap where
+prop_MapFunctor :: [(Int,String)] -> String -> Bool
+prop_MapFunctor xs pre = allMap where
     fullMap :: Fix (Tree23 (Map Int String))
     fullMap = foldr (uncurry insertMap) empty23 xs
     pl = length pre
     mapped :: Fix (Tree23 (Map Int String))
-    mapped = mapMap (pre ++) fullMap
+    mapped = fmapF (pre ++) fullMap
     keys = fmap fst xs
     allMap = all ((Just pre ==) . fmap (take pl) . flip lookupMap mapped) keys 
 
@@ -104,6 +112,25 @@ prop_MapMinMax xs'' i = minMax where
     Just maxxs' = maxMap fullMap
     minMax = minxs == minxs' && maxxs == maxxs'
        
+prop_MapFoldable :: [Int] -> Bool
+prop_MapFoldable xs = mapSum == listSum where
+    fullMap = fromListMap (zip [1..] xs) :: Fix (Tree23 (Map Int Int))
+    mapSum = getSum $ foldMapF Sum fullMap
+    listSum = getSum $ foldMap Sum xs
+
+prop_MapTraversable :: [Int] -> Bool
+prop_MapTraversable xs = testEvens evens' && testOdds odds' where
+    evens :: Fix (Tree23 (Map Int Int))
+    evens = fromListMap (zip [1..] $ filter even xs)
+    odds :: Fix (Tree23 (Map Int Int))
+    odds = fromListMap (zip [1..] $ filter odd xs)
+    f x = if even x then Nothing else Just x
+    evens' = traverseF' f evens
+    odds' = traverseF' f odds
+    testEvens Nothing = True
+    testEvens (Just ev) = Tree23.null ev
+    testOdds Nothing = False
+    testOdds _ = True
 
 test23 = testGroup "Tree23"
     [
@@ -114,6 +141,7 @@ test23 = testGroup "Tree23"
            ,testProperty "Set Delete All" prop_SetDeleteAll
            ,testProperty "Set Partition" prop_SetPartition
            ,testProperty "Set Min/Max" prop_SetMinMax
+           ,testProperty "Set Foldable" prop_SetFoldable
         ]
        ,testGroup "Map"
        [
@@ -122,6 +150,8 @@ test23 = testGroup "Tree23"
            ,testProperty "Map Replace" prop_MapReplace
            ,testProperty "Map Delete All" prop_MapDeleteAll
            ,testProperty "Map Partition" prop_MapPartition
-           ,testProperty "Map Map" prop_MapMap
+           ,testProperty "Map Foldable" prop_MapFoldable
+           ,testProperty "Map Functor" prop_MapFunctor
+           ,testProperty "Map Traversable" prop_MapTraversable
        ]
     ]

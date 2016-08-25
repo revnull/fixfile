@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
-    DeriveDataTypeable #-}
+    DeriveDataTypeable, TypeFamilies #-}
 
 {- |
     Module      :  Data.FixFile.Set
@@ -34,6 +34,7 @@ import Prelude hiding (lookup)
 
 import Data.Binary
 import Data.Dynamic
+import Data.Monoid
 import GHC.Generics
 
 import Data.FixFile
@@ -115,4 +116,12 @@ toListSet s = cata phi s [] where
 -- | 'Transaction' version of 'toListSet'.
 toListSetT :: Binary i => Transaction (Ref (Set i)) s [i]
 toListSetT = lookupT toListSet
+
+instance FixedAlg (Set i) where
+    type Alg (Set i) = i
+
+instance FixedFoldable (Set i) where
+    foldMapF f = cata phi where
+        phi Empty = mempty
+        phi (Node l i r) = l <> f i <> r
 

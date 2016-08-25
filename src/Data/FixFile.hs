@@ -43,6 +43,13 @@ module Data.FixFile (
                      ,ParaAlg
                      ,para
                      ,iso
+                     ,FixedAlg(..)
+                     ,FixedSub(..)
+                     ,FixedFunctor(..)
+                     ,fmapF'
+                     ,FixedFoldable(..)
+                     ,FixedTraversable(..)
+                     ,traverseF'
                      -- * Root Data
                      ,Fixable
                      ,FixTraverse(..)

@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeFamilies #-}
 
 {- |
     Module      :  Data.FixFile.Fixed
@@ -23,6 +24,13 @@ module Data.FixFile.Fixed (
                            ,ParaAlg
                            ,para
                            ,iso
+                           ,FixedAlg(..)
+                           ,FixedSub(..)
+                           ,FixedFunctor(..)
+                           ,fmapF'
+                           ,FixedFoldable(..)
+                           ,FixedTraversable(..)
+                           ,traverseF'
                            ) where
 
 {-|
@@ -94,4 +102,28 @@ para f = f . fmap para' . outf where
 -}
 iso :: (Functor f, Fixed g, Fixed h) => g f -> h f
 iso = cata inf
+
+class FixedAlg f where
+    type Alg (f :: * -> *) :: *
+
+class FixedAlg f => FixedSub f where
+    type Sub (f :: * -> *) v v' :: * -> *
+
+class FixedSub f => FixedFunctor f where
+    fmapF :: (Fixed g, Fixed g') => (Alg f -> b) -> g f -> g' (Sub f (Alg f) b)
+
+fmapF' :: (FixedFunctor f, Fixed g) =>
+    (Alg f -> b) -> g f -> g (Sub f (Alg f) b)
+fmapF' = fmapF
+
+class FixedAlg f => FixedFoldable f where
+    foldMapF :: (Fixed g, Monoid m) => (Alg f -> m) -> g f -> m
+
+class FixedSub f => FixedTraversable f where
+    traverseF :: (Fixed g, Fixed g', Applicative h) =>
+        (Alg f -> h b) -> g f -> h (g' (Sub f (Alg f) b))
+
+traverseF' :: (FixedTraversable f, Fixed g, Applicative h) =>
+    (Alg f -> h b) -> g f -> h (g (Sub f (Alg f) b))
+traverseF' = traverseF
 

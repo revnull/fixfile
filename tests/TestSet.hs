@@ -1,6 +1,9 @@
 
 module TestSet(testSet) where
 
+import Data.List
+import Data.Monoid
+
 import Test.Tasty
 import Test.Tasty.QuickCheck
 import Test.QuickCheck
@@ -25,9 +28,16 @@ prop_SetDeleteAll xs = allDeleted where
     delSet = foldr deleteSet fullSet xs
     allDeleted = [] == toListSet delSet
 
+prop_SetFoldable :: [Int] -> Bool
+prop_SetFoldable xs = setSum == listSum where
+    fullSet = foldr insertSet (empty :: Fix (Set Int)) xs
+    setSum = getSum $ foldMapF Sum fullSet
+    listSum = getSum $ foldMap Sum (nub xs)
+
 testSet = testGroup "Set"
     [
         testProperty "Set Insert" prop_SetInsert
        ,testProperty "Set Delete" prop_SetDelete
        ,testProperty "Set Delete All" prop_SetDeleteAll
+       ,testProperty "Set Foldable" prop_SetFoldable
     ]

@@ -45,7 +45,6 @@ module Data.FixFile.Tree23 (Tree23
                            ,deleteMap
                            ,partitionMap
                            ,alterMap
-                           ,mapMap
                            ,minMap
                            ,maxMap
                            ,toListMap
@@ -67,7 +66,9 @@ import Prelude hiding (null)
 import Data.Dynamic
 import Data.Binary
 import Data.Maybe
-import GHC.Generics
+import Data.Monoid
+import GHC.Generics (Generic)
+import Unsafe.Coerce
  
 import Data.FixFile
 
@@ -225,6 +226,16 @@ maxSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
     Transaction (Ref f) s (Maybe k)
 maxSetT = lookupT maxSet
 
+instance FixedAlg (Tree23 (Set k)) where
+    type Alg (Tree23 (Set k)) = k
+
+instance FixedFoldable (Tree23 (Set k)) where
+    foldMapF f = cata phi where
+        phi Empty = mempty
+        phi (Leaf (SK k) _) = f k
+        phi (Two l _ r) = l <> r
+        phi (Three l _ m _ r) = l <> m <> r
+
 -- | A 'Map' of keys 'k' to values 'v' represented as a Two-Three Tree.
 data Map k v
 
@@ -294,16 +305,6 @@ maxMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => g f -> Maybe (k, v)
 maxMap t = do
     (MK k, MV v) <- maxTree23 t
     return (k, v)
-
--- | Map a function over a map. Because of the way Tree23 is implemented, it is
---   not possible to create a Functor instance to achieve this.
-mapMap :: (Fixed g, Fixed h, Ord k) => (a -> b) -> g (Tree23 (Map k a)) ->
-    h (Tree23 (Map k b))
-mapMap f = cata phi where
-    phi Empty = empty
-    phi (Leaf (MK k) (MV a)) = leaf (MK k) (MV (f a))
-    phi (Two l (MK k) r) = two l (MK k) r
-    phi (Three l (MK k1) m (MK k2) r) = three l (MK k1) m (MK k2) r
 
 -- | Create a 'FixFile' of a Map.
 createMapFile :: (Binary k, Typeable k, Binary v, Typeable v,
@@ -581,4 +582,33 @@ maxTree23 = cata phi where
     phi (Leaf k v) = Just (k, v)
     phi (Two _ _ r) = r
     phi (Three _ _ _ _ r) = r 
+
+instance FixedAlg (Tree23 (Map k v)) where
+    type Alg (Tree23 (Map k v)) = v
+
+instance FixedSub (Tree23 (Map k v)) where
+    type Sub (Tree23 (Map k v)) v v' = Tree23 (Map k v')
+
+instance FixedFunctor (Tree23 (Map k v)) where
+    fmapF f = cata phi where
+        phi Empty = empty
+        phi (Leaf k (MV v)) = leaf (unsafeCoerce k) (MV (f v))
+        phi (Two l k r) = two l (unsafeCoerce k) r
+        phi (Three l k1 m k2 r) =
+            three l (unsafeCoerce k1) m (unsafeCoerce k2) r
+
+instance FixedFoldable (Tree23 (Map k v)) where
+    foldMapF f = cata phi where
+        phi Empty = mempty
+        phi (Leaf _ (MV v)) = f v
+        phi (Two l _ r) = l <> r
+        phi (Three l _ m _ r) = l <> m <> r
+
+instance FixedTraversable (Tree23 (Map k v)) where
+    traverseF f = cata phi where
+        phi Empty = pure empty
+        phi (Leaf k (MV v)) = (leaf (unsafeCoerce k) . MV) <$> f v
+        phi (Two l k r) = two <$> l <*> pure (unsafeCoerce k) <*> r
+        phi (Three l k1 m k2 r) = three <$> l <*> pure (unsafeCoerce k1) <*>
+            m <*> pure (unsafeCoerce k2) <*> r
 
