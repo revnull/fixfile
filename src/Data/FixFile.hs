@@ -43,6 +43,7 @@ module Data.FixFile (
                      ,ParaAlg
                      ,para
                      ,iso
+                     -- * Fixed Typeclasses
                      ,FixedAlg(..)
                      ,FixedSub(..)
                      ,FixedFunctor(..)
@@ -234,7 +235,7 @@ type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f)
 
 {- |
     'FixTraverse' is a class based on 'Traverse' but taking an argument of kind
-    @(* -> *) -> *)@ instead of @*@.
+    @((* -> *) -> *)@ instead of @*@.
 -}
 class FixTraverse (t :: ((* -> *) -> *) -> *) where
     -- | Given a function that maps from @a@ to @b@ over @'Fixable' g@ in the

@@ -103,26 +103,55 @@ para f = f . fmap para' . outf where
 iso :: (Functor f, Fixed g, Fixed h) => g f -> h f
 iso = cata inf
 
+{-|
+    'FixedAlg' is a typeclass for describing the relationship between a
+    'Functor' that is used with a 'Fixed' combinator and an algebraic datatype
+    in that 'Functor' other than the one used for fixed-point recursion.
+-}
 class FixedAlg (f :: * -> *) where
     type Alg f :: *
 
+{-|
+    'FixedSub' is a typeclass for describing the relationship between a
+    'FixedAlg' 'Functor' @f@ and that same 'Functor' with @Alg f@ switched
+    from @v@ to @v'@.
+-}
 class FixedAlg f => FixedSub f where
     type Sub f v v' :: * -> *
 
+{-|
+    'FixedFunctor' is a typeclass for describing mapping behavior for datatypes
+    used with 'Fixed' combinators.
+-}
 class FixedSub f => FixedFunctor f where
-    fmapF :: (Fixed g, Fixed g', a ~ Alg f) => (a -> b) -> g f -> g' (Sub f a b)
+    -- | Map over a 'Fixed' recursive 'FixedSub' @f@.
+    fmapF :: (Fixed g, Fixed g', a ~ Alg f) =>
+        (a -> b) -> g f -> g' (Sub f a b)
 
+-- | 'fmapF', but using a single instance of 'Fixed'.
 fmapF' :: (FixedFunctor f, Fixed g, a ~ Alg f) =>
     (a -> b) -> g f -> g (Sub f a b)
 fmapF' = fmapF
 
+{-|
+    'FixedFoldable' is a typeclass for describing folds over datatypes with
+    'Fixed' combinators.
+-}
 class FixedAlg f => FixedFoldable f where
+    -- | Fold over a 'Fixed' recursive 'FixedAlg' @f@.
     foldMapF :: (Fixed g, Monoid m, a ~ Alg f) => (a -> m) -> g f -> m
 
+{-|
+    'FixedTraversable' is a typeclass for describing traversals over datatypes
+    with 'Fixed' combinators.
+-}
 class FixedSub f => FixedTraversable f where
+    -- | Traverse over a 'Fixed' recursive 'FixedSub' @f@ in the 'Applicative'
+    -- @h@.
     traverseF :: (Fixed g, Fixed g', Applicative h, a ~ Alg f) =>
         (a -> h b) -> g f -> h (g' (Sub f a b))
 
+-- | 'traverseF', but using a single instance of 'Fixed'.
 traverseF' :: (FixedTraversable f, Fixed g, Applicative h, a ~ Alg f) =>
     (a -> h b) -> g f -> h (g (Sub f a b))
 traverseF' = traverseF
