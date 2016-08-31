@@ -66,6 +66,7 @@ module Data.FixFile (
                      ,openFixFileHandle
                      ,closeFixFile
                      ,fixFilePath
+                     ,clone
                      ,vacuum
                      -- * Transactions
                      ,Transaction
@@ -164,21 +165,23 @@ getRawBlock h p = do
     (sb :: Word32) <- decode <$> (BSL.hGet h 4)
     decode <$> BSL.hGet h (fromIntegral sb)
 
-getBlock :: (Typeable f, Binary (f (Ptr f))) => (Ptr f) -> FFH -> IO (f (Ptr f))
+getBlock :: (Typeable f, Binary (f (Ptr f))) => Ptr f -> FFH -> IO (f (Ptr f))
 getBlock p@(Ptr pos) (FFH mh mc) = getCachedOrStored p readFromFile mc where
     readFromFile = withMVar mh $ flip getRawBlock pos
 
+putRawBlock' :: Binary a => a -> Handle -> IO Pos
+putRawBlock' a h = do
+    hSeek h SeekFromEnd 0
+    p <- fromIntegral <$> hTell h
+    let enc  = encode a
+        len  = fromIntegral $ BSL.length enc
+        len' = encode (len :: Word32)
+        enc' = mappend len' enc
+    BSL.hPut h enc'
+    return p
+
 putRawBlock :: Binary a => a -> FFH -> IO Pos
-putRawBlock a (FFH mh _) = putRaw where
-    putRaw = withMVar mh $ \h -> do
-        hSeek h SeekFromEnd 0
-        p <- fromIntegral <$> hTell h
-        let enc  = encode a
-            len  = fromIntegral $ BSL.length enc
-            len' = encode (len :: Word32)
-            enc' = mappend len' enc
-        BSL.hPut h enc'
-        return p
+putRawBlock a (FFH mh _) = withMVar mh $ putRawBlock' a
 
 putBlock :: (Typeable f, Binary (f (Ptr f))) => (f (Ptr f)) -> FFH ->
     IO (Ptr f)
@@ -522,6 +525,30 @@ getRoot = rootIso <$> RWS.get
 getFull :: Functor f => Transaction (Ref f) s (Fix f)
 getFull = uses ref iso
 
+cloneH :: Root r => FixFile r -> Handle -> IO ()
+cloneH (FixFile _ mv _) dh = runClone where
+    runClone = do
+        mv'@(ffh, root) <- takeMVar mv
+
+        BSL.hPut dh (encode (Ptr 0))
+
+        root' <- sequenceAFix (copyPtr ffh dh) root
+
+        r' <- putRawBlock' root' dh 
+        
+        hSeek dh AbsoluteSeek 0
+        BSL.hPut dh (encode r')
+
+        putMVar mv mv'
+
+    copyPtr ffh h p = do
+        b <- getBlock p ffh
+        b' <- mapM (copyPtr ffh h) b
+        Ptr <$> putRawBlock' b' h
+
+clone :: Root r => FilePath -> FixFile r -> IO ()
+clone fp ff = openBinaryFile fp ReadWriteMode >>= cloneH ff
+
 {- |
     Because a 'FixFile' is backed by an append-only file, there is a periodic
     need to 'vacuum' the file to garbage collect data that is no longer
@@ -534,18 +561,14 @@ getFull = uses ref iso
 vacuum :: Root r => FixFile r -> IO ()
 vacuum ff@(FixFile path mv _) = withWriteLock ff runVacuum where
     runVacuum = do
-        mval <- takeMVar mv
-
-        readFFHMV <- newMVar mval
-        readDB <- FixFile path readFFHMV <$> newMVar ()
-
         (tp, th) <- openTempFile (takeDirectory path) ".ffile.tmp"
-        hClose th
+    
+        cloneH ff th
 
-        rootMem <- readTransaction readDB (rootIso <$> RWS.get)
-        (FixFile _ newMV _) <- createFixFile rootMem tp
+        (FixFile _ newMV _) <- openFixFileHandle tp th
 
         renameFile tp path
 
-        takeMVar newMV >>= putMVar mv
-    
+        void $ takeMVar mv
+        readMVar newMV >>= putMVar mv
+
