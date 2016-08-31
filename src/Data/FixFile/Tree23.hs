@@ -58,7 +58,6 @@ module Data.FixFile.Tree23 (Tree23
                            ,maxMapT
                            ,keysMap
                            ,valuesMap
-                           ,partitionTree23
                            ) where
 
 import Prelude hiding (null)

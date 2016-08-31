@@ -546,6 +546,11 @@ cloneH (FixFile _ mv _) dh = runClone where
         b' <- mapM (copyPtr ffh h) b
         Ptr <$> putRawBlock' b' h
 
+{- |
+    It's potentially useful to copy the contents of a 'FixFile' to a new
+    location as a backup. The 'clone' function essentially runs 'vacuum'
+    on a 'FixFile', but writes the output to the specified path.
+-}
 clone :: Root r => FilePath -> FixFile r -> IO ()
 clone fp ff = openBinaryFile fp ReadWriteMode >>= cloneH ff
 
