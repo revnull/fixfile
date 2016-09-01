@@ -253,7 +253,7 @@ class FixTraverse (t :: ((* -> *) -> *) -> *) where
     -- | Given a function that maps from @a@ to @b@ over @'Fixable' g@ in the
     --   'Applicative' @f@, traverse over @t@ changing the fixed-point
     --   combinator from @a@ to @b@.
-    sequenceAFix :: Applicative f =>
+    traverseFix :: Applicative f =>
         (forall g. Fixable g => a g -> f (b g)) -> t a -> f (t b)
 
 {- | 
@@ -265,15 +265,15 @@ class FixTraverse (t :: ((* -> *) -> *) -> *) where
 type Root r = (FixTraverse r, Binary (r Ptr))
 
 readRoot :: Root r => r Ptr -> Transaction r' s (r (Stored s))
-readRoot = sequenceAFix readPtr where
+readRoot = traverseFix readPtr where
     readPtr p = withHandle $ flip readStoredLazy p
 
 writeRoot :: Root r => r (Stored s) -> Transaction r' s (r Ptr)
-writeRoot = sequenceAFix writeStored where
+writeRoot = traverseFix writeStored where
     writeStored s = withHandle $ flip sync s
 
 rootIso :: (Root r, Fixed g, Fixed h) => r g -> r h
-rootIso = runIdentity . sequenceAFix (Identity . iso)
+rootIso = runIdentity . traverseFix (Identity . iso)
 
 {- |
     A 'Ref' is a reference to a 'Functor' 'f' in the 'Fixed' instance of 'g'.
@@ -287,7 +287,7 @@ newtype Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
 instance Binary (Ref f Ptr)
 
 instance Fixable f => FixTraverse (Ref f) where
-    sequenceAFix isoT (Ref a) = Ref <$> isoT a
+    traverseFix isoT (Ref a) = Ref <$> isoT a
 
 -- | Lens for accessing the value stored in a Ref
 ref :: Lens' (Ref f g) (g f)
@@ -545,7 +545,7 @@ cloneH (FixFile _ mv _) dh = runClone where
 
         BSL.hPut dh (encode (Ptr 0))
 
-        root' <- sequenceAFix (copyPtr ffh dh) root
+        root' <- traverseFix (copyPtr ffh dh) root
 
         r' <- putRawBlock' root' dh 
         

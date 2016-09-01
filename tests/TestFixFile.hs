@@ -36,8 +36,8 @@ data TestRoot g =
 instance Binary (TestRoot Ptr)
 
 instance FixTraverse TestRoot where
-    sequenceAFix isoT (TR a b) =
-        TR <$> sequenceAFix isoT a <*> sequenceAFix isoT b
+    traverseFix isoT (TR a b) =
+        TR <$> traverseFix isoT a <*> traverseFix isoT b
 
 emptyTR :: TestRoot Fix
 emptyTR = TR (Ref empty) (Ref empty)
