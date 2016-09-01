@@ -281,7 +281,7 @@ rootIso = runIdentity . sequenceAFix (Identity . iso)
     This is an instance of 'Root' and acts to bridge between the 'Root' and
     the recursively defined data structure that is @('g' 'f')@.
 -}
-data Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
+newtype Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
     deriving (Generic)
 
 instance Binary (Ref f Ptr)
