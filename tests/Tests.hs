@@ -5,6 +5,7 @@ import TestSet
 import TestTree23
 import TestTrie
 import TestBTree
+import TestLightBTree
 import TestFixFile
 
 main :: IO ()
@@ -15,6 +16,7 @@ main = defaultMain $
        ,testSet
        ,testTrie
        ,testBTree
+       ,testLightBTree
        ,testFixFile
     ]
 

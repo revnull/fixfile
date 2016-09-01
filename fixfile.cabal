@@ -40,6 +40,7 @@ library
   default-language:     Haskell2010
   exposed-modules:      Data.FixFile
                        ,Data.FixFile.BTree
+                       ,Data.FixFile.BTree.Light
                        ,Data.FixFile.Set
                        ,Data.FixFile.Tree23
                        ,Data.FixFile.Trie

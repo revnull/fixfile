@@ -3,7 +3,7 @@
     TupleSections #-}
 
 {- |
-    Module      :  Data.FixFile.BTree
+    Module      :  Data.FixFile.BTree.Light
     Copyright   :  (C) 2016 Rev. Johnny Healey
     License     :  LGPL-3
     Maintainer  :  Rev. Johnny Healey <rev.null@gmail.com>
@@ -12,25 +12,27 @@
 
     This is a BTree data type that can be used with 'FixFile'. It can be used
     as a key-value store where the same key can correspond to multiple values.
-    It supports logarithmic insert, lookup, and delete operations.
+    It supports logarithmic insert, lookup, and delete operations. This BTree
+    embeds values in the leaf nodes instead of providing them with distinct
+    leaf nodes. It is not recommended for use with large values.
 -}
-module Data.FixFile.BTree (BTree
-                          ,createBTreeFile
-                          ,openBTreeFile
-                          ,empty
-                          ,depth
-                          ,insertBTree
-                          ,insertBTreeT
-                          ,lookupBTree
-                          ,lookupBTreeT
-                          ,filterBTree
-                          ,filterBTreeT
-                          ,deleteBTree
-                          ,deleteBTreeT
-                          ,partitionBTree
-                          ,toListBTree
-                          ,fromListBTree
-                          ) where
+module Data.FixFile.BTree.Light (BTree
+                                ,createBTreeFile
+                                ,openBTreeFile
+                                ,empty
+                                ,depth
+                                ,insertBTree
+                                ,insertBTreeT
+                                ,lookupBTree
+                                ,lookupBTreeT
+                                ,filterBTree
+                                ,filterBTreeT
+                                ,deleteBTree
+                                ,deleteBTreeT
+                                ,partitionBTree
+                                ,toListBTree
+                                ,fromListBTree
+                                ) where
 
 import Control.Monad.Writer
 import Data.Binary
@@ -48,40 +50,43 @@ import Data.FixFile
 -}
 data BTree (n :: Nat) k v a =
     Empty
-  | Value v
-  | Node Word32 (V.Vector (k, a))
+  | Node Word32 (Either (V.Vector (k, v)) (V.Vector (k, a)))
     deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
 instance (Binary k, Binary v, Binary a) => Binary (BTree n k v a) where
     put Empty = putWord8 0x45
-    put (Value v) = putWord8 0x56 >> put v
-    put (Node d vec) = do
-        putWord8 0x4e
+    put (Node _ (Left vec)) = do
+        putWord8 0x4c
+        put (V.length vec)
+        mapM_ put vec
+    put (Node d (Right vec)) = do
+        putWord8 0x52
         put d
         put (V.length vec)
         mapM_ put vec
     get = getWord8 >>= getBTree where
         getBTree 0x45 = return Empty
-        getBTree 0x56 = Value <$> get
-        getBTree 0x4e = Node <$> get <*> (get >>= \n -> V.replicateM n get)
+        getBTree 0x4c = (Node 1 . Left) <$>
+            (get >>= \n -> V.replicateM n get)
+        getBTree 0x52 = Node <$> get <*>
+            (get >>= \n -> Right <$> V.replicateM n get)
         getBTree _ = error "Can't decode into BTree"
 
 -- | Compute the depth of a 'BTree' 
 depth :: Fixed g => g (BTree n k v) -> Int
 depth = dep . outf where
     dep Empty = 0
-    dep (Value _) = 1
     dep (Node d _) = fromIntegral d
 
 -- | An empty 'BTree' 
 empty :: Fixed g => g (BTree n k v)
 empty = inf Empty
 
-value :: Fixed g => v -> g (BTree n k v)
-value = inf . Value
-
 node :: Fixed g => Word32 -> V.Vector (k, g (BTree n k v)) -> g (BTree n k v)
-node d = inf . Node d
+node d = inf . Node d . Right
+
+leaf :: Fixed g => V.Vector (k, v) -> g (BTree n k v)
+leaf = inf . Node 1 . Left
 
 -- | Create a 'FixFile' storing a @('BTree' k v)@.
 --   The initial value is 'empty'.
@@ -136,16 +141,27 @@ insertBTree k v t = merge . para phi $ t where
         | otherwise = 
             Inserted (fst $ V.head cs) (node d cs)
 
+    newLeaf c cs
+        | c > nodeSize =
+            let (l, r) = V.splitAt (nodeSize `div` 2) cs
+                l' = V.force l
+                r' = V.force r
+                mini = fst . V.head
+            in Split 1 (mini l, leaf l') (mini r, leaf r')
+        | otherwise =
+            Inserted (fst $ V.head cs) (leaf cs)
+            
     nodes = fmap (\(a,(b,_)) -> (a, b))
 
-    phi Empty = Inserted k $ node 0 $ V.singleton (k, value v)
-    phi (Value _) = error "insertBTree phi Value error"
+    phi Empty = Inserted k $ leaf $ V.singleton (k, v)
 
-    phi (Node 0 vec) =
-        let (lt, eq, gt) = split3 (splitRange k vec) (nodes vec)
+    phi (Node 1 (Left vec)) =
+        let (lt, eq, gt) = split3 (splitRange k vec) vec
             newSize = 1 + V.length vec
-        in newNode 0 newSize (V.concat [lt, eq, V.singleton (k, value v), gt])
-    phi (Node d vec) = 
+        in newLeaf newSize (V.concat [lt, eq, V.singleton (k, v), gt])
+    phi (Node _ (Left _)) = error "Malformed Leaf"
+
+    phi (Node d (Right vec)) = 
         let (lt, eq, gt) = split3 (splitRange k vec) vec
             lt' = nodes lt
             eq' = nodes eq
@@ -172,11 +188,13 @@ insertBTreeT k v = alterT (insertBTree k v)
 lookupBTree :: (Ord k, Fixed g) => k -> g (BTree n k v) -> [v]
 lookupBTree k = ($ []) . cata phi where
     phi Empty l = l
-    phi (Value v) l = v:l
-    phi (Node 0 vec) l =
+
+    phi (Node 1 (Left vec)) l =
         let (_, eq, _) = split3 (splitRange k vec) vec
-        in V.foldr (($) . snd) l eq
-    phi (Node _ vec) l =
+        in V.foldr ((:) . snd) l eq
+    phi (Node _ (Left _)) _ = error "Malformed Leaf"
+
+    phi (Node _ (Right vec)) l =
         let (_, eq, _) = split3 (s1 - 1, s2) vec
             (s1, s2) = splitRange k vec
         in V.foldr (($) . snd) l eq
@@ -203,27 +221,19 @@ filterBTree k f t = deleted' . para phi $ t where
     nodes = fmap (\(a, (b, _)) -> (a, b))
 
     phi Empty = UnChanged
-    phi (Value v) = if f v
-        then UnChanged
-        else AllDeleted
 
-    phi (Node 0 vec) =
+    phi (Node 1 (Left vec)) =
         let (lt, eq, gt) = split3 (splitRange k vec) vec
-            lt' = nodes lt
-            gt' = nodes gt
-            (eq',del) = runWriter $ do
-                res <- flip V.filterM eq $ \(_, (_, a)) ->
-                    case a of
-                        UnChanged -> return True
-                        _ -> tell (Any True) >> return False
-                return $ nodes res
-            vec' = V.concat [lt', eq', gt']
+            eq' = V.filter (f . snd) eq
+            vec' = V.concat [lt, eq', gt]
             mink = fst (V.head vec')
-        in case (V.null vec', getAny del) of
+        in case (V.null vec', V.length eq /= V.length eq') of
             (True, _) -> AllDeleted
             (_, False) -> UnChanged
-            _ -> Deleted mink $ node 0 vec'
-    phi (Node d vec) =
+            _ -> Deleted mink $ leaf vec'
+    phi (Node _ (Left _)) = error "Malformed Leaf"
+
+    phi (Node d (Right vec)) =
         let (lt, eq, gt) = split3 (s1 - 1, s2) vec
             (s1, s2) = splitRange k vec
             lt' = nodes lt
@@ -277,8 +287,8 @@ partitionBTree k t = parted . para phi $ t where
     nodes = fmap (\(a, (b, _)) -> (a, b))
 
     phi Empty = NoPart L
-    phi (Value _) = error "Unbalanced BTree"
-    phi (Node 0 vec) =
+
+    phi (Node 1 (Left vec)) =
         let (lt, gte) = V.splitAt s1 vec
             (s1, _) = splitRange k vec
             minkl = fst (V.head lt)
@@ -286,8 +296,10 @@ partitionBTree k t = parted . para phi $ t where
         in case (V.null lt, V.null gte) of
             (True, _) -> NoPart R
             (_, True) -> NoPart L
-            _ -> Parted (minkl, node 0 (nodes lt)) (minkr, node 0 (nodes gte))
-    phi (Node d vec) = 
+            _ -> Parted (minkl, leaf lt) (minkr, leaf gte)
+    phi (Node _ (Left _)) = error "Malformed Leaf"
+
+    phi (Node d (Right vec)) = 
         let (lt, eq, gt) = split3 (s1 - 1, s1) vec
             (s1, _) = splitRange k vec
             lt' = nodes lt
@@ -311,11 +323,13 @@ partitionBTree k t = parted . para phi $ t where
 
 -- | Turn a 'Fixed' @('BTree' k v)@ into a list of key value tuples.
 toListBTree :: (Ord k, Fixed g) => g (BTree n k v) -> [(k,v)]
-toListBTree t = cata phi t Nothing [] where
-    phi Empty _ l = l
-    phi (Value v) (Just k) l = (k, v):l
-    phi (Value _) _ _ = error "Value with no Key"
-    phi (Node _ vec) _ l = V.foldr (\(k,v) -> ((v (Just k)) .)) id vec l
+toListBTree t = cata phi t [] where
+    phi Empty = id
+
+    phi (Node 1 (Left vec)) = foldMap (:) vec
+    phi (Node _ (Left _)) = error "Malformed Leaf"
+
+    phi (Node _ (Right vec)) = foldMap snd vec
 
 -- | Turn a list of key value tuples into a 'Fixed' @('BTree' k v)@.
 fromListBTree :: (KnownNat n, Ord k, Fixed g) => [(k,v)] -> g (BTree n k v)
@@ -330,18 +344,21 @@ instance FixedSub (BTree n k v) where
 instance FixedFunctor (BTree n k v) where
     fmapF f = cata phi where
         phi Empty = empty
-        phi (Value v) = value (f v)
-        phi (Node c vec) = node c vec
+        phi (Node 1 (Left vec)) = leaf $ fmap (fmap f) vec
+        phi (Node _ (Left _)) = error "Malformed Leaf"
+        phi (Node c (Right vec)) = node c vec
 
 instance FixedFoldable (BTree n k v) where
     foldMapF f = cata phi where
         phi Empty = mempty
-        phi (Value v) = f v
-        phi (Node _ vec) = foldMap snd vec
+        phi (Node 1 (Left vec)) = foldMap (f . snd) vec
+        phi (Node _ (Left _)) = error "Malformed Leaf"
+        phi (Node _ (Right vec)) = foldMap snd vec
 
 instance FixedTraversable (BTree n k v) where
     traverseF f = cata phi where
         phi Empty = pure empty
-        phi (Value v) = value <$> f v
-        phi (Node c vec) = node c <$> traverse (\(w, a) -> (w,) <$> a) vec 
+        phi (Node 1 (Left vec)) = leaf <$> traverse (\(w, a) -> (w,) <$> f a) vec 
+        phi (Node _ (Left _)) = error "Malformed Leaf"
+        phi (Node c (Right vec)) = node c <$> traverse (\(w, a) -> (w,) <$> a) vec 
 
