@@ -37,11 +37,19 @@ module Data.FixFile (
                      ,Stored
                      -- * F-Algebras
                      ,CataAlg
+                     ,CataMAlg
                      ,cata
+                     ,cataM
                      ,AnaAlg
+                     ,AnaMAlg
                      ,ana
+                     ,anaM
                      ,ParaAlg
+                     ,ParaMAlg
                      ,para
+                     ,paraM
+                     ,hylo
+                     ,hyloM
                      ,iso
                      -- * Fixed Typeclasses
                      ,FixedAlg(..)
@@ -67,6 +75,7 @@ module Data.FixFile (
                      ,closeFixFile
                      ,fixFilePath
                      ,clone
+                     ,cloneH
                      ,vacuum
                      -- * Transactions
                      ,Transaction
@@ -525,6 +534,10 @@ getRoot = rootIso <$> RWS.get
 getFull :: Functor f => Transaction (Ref f) s (Fix f)
 getFull = uses ref iso
 
+{- |
+    'cloneH' is 'clone' but taking a 'Handle' as an argument instead of a
+    'FilePath'.
+-}
 cloneH :: Root r => FixFile r -> Handle -> IO ()
 cloneH (FixFile _ mv _) dh = runClone where
     runClone = do
@@ -541,10 +554,7 @@ cloneH (FixFile _ mv _) dh = runClone where
 
         putMVar mv mv'
 
-    copyPtr ffh h p = do
-        b <- getBlock p ffh
-        b' <- mapM (copyPtr ffh h) b
-        Ptr <$> putRawBlock' b' h
+    copyPtr ffh h = hyloM (flip getBlock ffh) ((Ptr <$>) . flip putRawBlock' h)
 
 {- |
     It's potentially useful to copy the contents of a 'FixFile' to a new
