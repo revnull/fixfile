@@ -44,6 +44,7 @@ library
                        ,Data.FixFile.Set
                        ,Data.FixFile.Tree23
                        ,Data.FixFile.Trie
+                       ,Data.FixFile.Trie.Light
   other-modules:        Data.FixFile.Fixed
   ghc-options:          -Wall
 
