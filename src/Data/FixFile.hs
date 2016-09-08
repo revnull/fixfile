@@ -94,13 +94,15 @@ import Prelude hiding (sequence, mapM, lookup)
 import Control.Concurrent.MVar
 import Control.Exception
 import Control.Lens hiding (iso, para)
-import Control.Monad.Except
-import qualified Control.Monad.RWS as RWS
+import Control.Monad.Except hiding (mapM_)
+import qualified Control.Monad.RWS as RWS hiding (mapM_)
 import Data.Binary
+import Data.ByteString as BS
 import Data.ByteString.Lazy as BSL
 import Data.Dynamic
 import Data.Hashable
-import Data.HashTable.IO
+import Data.HashTable.IO hiding (mapM_)
+import Data.IORef
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
@@ -165,8 +167,37 @@ withCache_ cs f = withCache cs $ \c -> f c >>= \c' -> return (c', ())
 
 type Pos = Word64
 
+data WriteBuffer = WB ([BS.ByteString] -> [BS.ByteString]) Pos Pos
+
+bufferFlushSize :: Word64
+bufferFlushSize = 10485760 -- 10 MB
+
+initWB :: Handle -> IO WriteBuffer
+initWB h = do
+    hSeek h SeekFromEnd 0
+    p <- fromIntegral <$> hTell h
+    return $ WB id p p
+
+writeWB :: Binary a => a -> WriteBuffer -> (WriteBuffer, Pos, Bool)
+writeWB a (WB bsf st end) = sbs `seq` wb where
+    wb = (WB bsf' st end', end, end' - st > bufferFlushSize)
+    enc = encode a
+    len = fromIntegral $ BSL.length enc
+    len' = encode (len :: Word32)
+    sbs = BSL.toStrict (len' <> enc)
+    end' = end + 4 + fromIntegral len
+    bsf' = bsf . (sbs:)
+
+flushBuffer :: WriteBuffer -> Handle -> IO WriteBuffer
+flushBuffer (WB bsf st en) h = do
+    hSeek h SeekFromEnd 0
+    p <- fromIntegral <$> hTell h
+    when (p /= st) $ fail "WriteBuffer position failure."
+    mapM_ (BS.hPut h) (bsf [])
+    return (WB id en en)
+
 -- FFH is a FixFile Handle. This is an internal data structure.
-data FFH = FFH (MVar Handle) (MVar Caches)
+data FFH = FFH (MVar Handle) (IORef WriteBuffer) (MVar Caches)
 
 getRawBlock :: Binary a => Handle -> Pos -> IO a
 getRawBlock h p = do
@@ -175,26 +206,23 @@ getRawBlock h p = do
     decode <$> BSL.hGet h (fromIntegral sb)
 
 getBlock :: (Typeable f, Binary (f (Ptr f))) => Ptr f -> FFH -> IO (f (Ptr f))
-getBlock p@(Ptr pos) (FFH mh mc) = getCachedOrStored p readFromFile mc where
+getBlock p@(Ptr pos) (FFH mh _ mc) = getCachedOrStored p readFromFile mc where
     readFromFile = withMVar mh $ flip getRawBlock pos
 
-putRawBlock' :: Binary a => a -> Handle -> IO Pos
-putRawBlock' a h = do
-    hSeek h SeekFromEnd 0
-    p <- fromIntegral <$> hTell h
-    let enc  = encode a
-        len  = fromIntegral $ BSL.length enc
-        len' = encode (len :: Word32)
-        enc' = mappend len' enc
-    BSL.hPut h enc'
+putRawBlock :: Binary a => Bool -> a -> FFH -> IO Pos
+putRawBlock fl a (FFH mh wb _) = do
+    wb' <- readIORef wb
+    let (wb'', p, fl') = writeWB a wb'
+    if (fl' || fl)
+        then do
+            wb''' <- withMVar mh (flushBuffer wb'')
+            writeIORef wb wb'''
+        else writeIORef wb wb''
     return p
-
-putRawBlock :: Binary a => a -> FFH -> IO Pos
-putRawBlock a (FFH mh _) = withMVar mh $ putRawBlock' a
 
 putBlock :: (Typeable f, Binary (f (Ptr f))) => (f (Ptr f)) -> FFH ->
     IO (Ptr f)
-putBlock a h@(FFH _ mc) = putRawBlock a h >>= cacheBlock . Ptr where
+putBlock a h@(FFH _ _ mc) = putRawBlock False a h >>= cacheBlock . Ptr where
     cacheBlock p = do
         withCache_ mc (cacheInsert p a)
         return p
@@ -383,13 +411,13 @@ withWriteLock ff f = do
     f `finally` releaseWriteLock ff
 
 readHeader :: FFH -> IO (Pos)
-readHeader (FFH mh _) = withMVar mh $ \h -> do
+readHeader (FFH mh _ _) = withMVar mh $ \h -> do
     hSeek h AbsoluteSeek 0
     decode <$> BSL.hGet h 8
 
 updateHeader :: Pos -> Transaction r s ()
 updateHeader p = do
-    withHandle $ \(FFH mh _) -> 
+    withHandle $ \(FFH mh _ _) -> 
         withMVar mh $ \h -> do
             hSeek h AbsoluteSeek 0
             BSL.hPut h (encode p)
@@ -411,11 +439,12 @@ createFixFile initial path =
 createFixFileHandle :: Root r =>
     r Fix -> FilePath -> Handle -> IO (FixFile r)
 createFixFileHandle initial path h = do
-    ffh <- FFH <$> newMVar h <*> newMVar M.empty
     BSL.hPut h (encode (0 :: Pos))
+    wb <- initWB h
+    ffh <- FFH <$> newMVar h <*> newIORef wb <*> newMVar M.empty
     let t = runRT $ do
             dr <- writeRoot $ rootIso initial
-            (withHandle $ putRawBlock dr) >>= updateHeader
+            (withHandle $ putRawBlock True dr) >>= updateHeader
             Transaction . RWS.tell . Last . Just $ dr
     (_,_,root') <- RWS.runRWST t ffh undefined
     let Just root = getLast root'
@@ -436,7 +465,8 @@ openFixFile path =
 openFixFileHandle :: Binary (r Ptr) => FilePath -> Handle ->
     IO (FixFile r)
 openFixFileHandle path h = do
-    ffh <- FFH <$> newMVar h <*> newMVar M.empty
+    wb <- initWB h
+    ffh <- FFH <$> newMVar h <*> newIORef wb <*> newMVar M.empty
     root <- readHeader ffh >>= getRawBlock h 
     ffhmv <- newMVar (ffh, root)
     FixFile path ffhmv <$> newMVar ()
@@ -447,7 +477,7 @@ openFixFileHandle path h = do
 -}
 closeFixFile :: FixFile r -> IO ()
 closeFixFile (FixFile path tmv _) = do
-    (FFH mh _, _) <- takeMVar tmv
+    (FFH mh _ _, _) <- takeMVar tmv
     h <- takeMVar mh
     hClose h
     putMVar mh $ error (path ++ " is closed.")
@@ -482,7 +512,7 @@ writeTransaction ff@(FixFile _ ffhmv _) t = res where
         let t' = readRoot root >>= RWS.put >> t >>= save
             save a = do
                 dr <- RWS.get >>= writeRoot
-                (withHandle $ putRawBlock dr) >>= updateHeader
+                (withHandle $ putRawBlock True dr) >>= updateHeader
                 Transaction . RWS.tell . Last . Just $ dr
                 return a
         (a, root') <- RWS.evalRWST (runRT t') ffh undefined
@@ -511,7 +541,7 @@ writeExceptTransaction ff@(FixFile _ ffhmv _) t = res where
             save l@(Left _) = return l
             save r@(Right _) = do
                 dr <- RWS.get >>= writeRoot
-                (withHandle $ putRawBlock dr) >>= updateHeader
+                (withHandle $ putRawBlock True dr) >>= updateHeader
                 Transaction . RWS.tell . Last . Just $ dr
                 return r
         (a, root') <- RWS.evalRWST (runRT t') ffh undefined
@@ -545,16 +575,22 @@ cloneH (FixFile _ mv _) dh = runClone where
 
         BSL.hPut dh (encode (Ptr 0))
 
-        root' <- traverseFix (copyPtr ffh dh) root
+        wb <- initWB dh
+        wb' <- newIORef wb
+        dffh <- FFH <$> newMVar dh <*> return wb' <*> newMVar M.empty
 
-        r' <- putRawBlock' root' dh 
-        
+        root' <- traverseFix (copyPtr ffh dffh) root
+
+        r' <- putRawBlock True root' dffh 
+
         hSeek dh AbsoluteSeek 0
         BSL.hPut dh (encode r')
 
         putMVar mv mv'
 
-    copyPtr ffh h = hyloM (flip getBlock ffh) ((Ptr <$>) . flip putRawBlock' h)
+    copyPtr ffh h = hyloM
+        (flip getBlock ffh)
+        ((Ptr <$>) . flip (putRawBlock False) h)
 
 {- |
     It's potentially useful to copy the contents of a 'FixFile' to a new
