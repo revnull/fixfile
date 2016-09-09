@@ -108,6 +108,7 @@ type CataMAlg m f a = f a -> m a
     'cata' applies a 'CataAlg' over a fixed point of a 'Functor'.
 -}
 cata :: (Functor f, Fixed g) => CataAlg f a -> g f -> a
+{-# INLINE[1] cata #-}
 cata f = f . fmap (cata f) . outf
 
 {-|
@@ -158,6 +159,8 @@ iso = cata inf
 hylo :: Functor f => AnaAlg f a -> CataAlg f b -> a -> b
 hylo f g = hylo' where hylo' = g . fmap hylo' . f
 
+{-# RULES "hylo" forall f g a. cata g (ana f a) = hylo f g a #-}
+
 {-|
     'hyloM' is a monadic hylomorphism.
 -}
@@ -165,6 +168,8 @@ hylo f g = hylo' where hylo' = g . fmap hylo' . f
 hyloM :: (Traversable f, Monad m) =>
     AnaMAlg m f a -> CataMAlg m f b -> a -> m b
 hyloM f g = hylo' where hylo' = g <=< mapM hylo' <=< f
+
+{-# RULES "hyloM" forall f g a. anaM f a >>= cataM g = hyloM f g a #-}
 
 {-|
     'FixedAlg' is a typeclass for describing the relationship between a
