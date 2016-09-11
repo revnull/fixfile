@@ -19,7 +19,6 @@
 module Data.FixFile.BTree.Light (BTree
                                 ,createBTreeFile
                                 ,openBTreeFile
-                                ,empty
                                 ,depth
                                 ,insertBTree
                                 ,insertBTreeT
@@ -53,6 +52,11 @@ data BTree (n :: Nat) k v a =
   | Node Word32 (Either (V.Vector (k, v)) (V.Vector (k, a)))
     deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
+instance Null1 (BTree n k v) where
+    empty1 = Empty
+    null1 Empty = True
+    null1 _ = False
+
 instance (Binary k, Binary v, Binary a) => Binary (BTree n k v a) where
     put Empty = putWord8 0x45
     put (Node _ (Left vec)) = do
@@ -77,10 +81,6 @@ depth :: Fixed g => g (BTree n k v) -> Int
 depth = dep . outf where
     dep Empty = 0
     dep (Node d _) = fromIntegral d
-
--- | An empty 'BTree' 
-empty :: Fixed g => g (BTree n k v)
-empty = inf Empty
 
 node :: Fixed g => Word32 -> V.Vector (k, g (BTree n k v)) -> g (BTree n k v)
 node d = inf . Node d . Right

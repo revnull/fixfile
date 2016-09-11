@@ -31,10 +31,13 @@
  -}
 
 module Data.FixFile (
-                      -- * Fixed point combinators
+                     -- * Fixed point combinators
                       Fixed(..)
                      ,Fix(..)
                      ,Stored
+                     -- * Null typeclasses
+                     ,Null(..)
+                     ,Null1(..)
                      -- * F-Algebras
                      ,CataAlg
                      ,CataMAlg
@@ -89,7 +92,7 @@ module Data.FixFile (
                      ,getFull
                      ) where
 
-import Prelude hiding (sequence, mapM, lookup)
+import Prelude hiding (sequence, mapM, lookup, null)
 
 import Control.Concurrent.MVar
 import Control.Exception
@@ -97,8 +100,8 @@ import Control.Lens hiding (iso, para)
 import Control.Monad.Except hiding (mapM_)
 import qualified Control.Monad.RWS as RWS hiding (mapM_)
 import Data.Binary
-import Data.ByteString as BS
-import Data.ByteString.Lazy as BSL
+import Data.ByteString as BS hiding (null, empty)
+import Data.ByteString.Lazy as BSL hiding (null, empty)
 import Data.Dynamic
 import Data.Hashable
 import Data.HashTable.IO hiding (mapM_)
@@ -113,6 +116,7 @@ import System.IO
 import System.IO.Unsafe
 
 import Data.FixFile.Fixed
+import Data.FixFile.Null
 
 type HashTable k v = CuckooHashTable k v
 
@@ -143,8 +147,9 @@ cacheLookup p c@(Cache _ oc nc) = do
             return (c', val)
         _ -> return (c, val)
 
-getCachedOrStored :: Typeable f => Ptr f -> IO (f (Ptr f)) -> MVar Caches ->
-    IO (f (Ptr f))
+getCachedOrStored :: (Null1 f, Typeable f) => Ptr f -> IO (f (Ptr f)) ->
+    MVar Caches -> IO (f (Ptr f))
+getCachedOrStored (Ptr 0) _ _ = return empty1
 getCachedOrStored p m cs = do
     mval <- withCache cs (cacheLookup p)
     case mval of
@@ -205,7 +210,7 @@ getRawBlock h p = do
     (sb :: Word32) <- decode <$> (BSL.hGet h 4)
     decode <$> BSL.hGet h (fromIntegral sb)
 
-getBlock :: (Typeable f, Binary (f (Ptr f))) => Ptr f -> FFH -> IO (f (Ptr f))
+getBlock :: Fixable f => Ptr f -> FFH -> IO (f (Ptr f))
 getBlock p@(Ptr pos) (FFH mh _ mc) = getCachedOrStored p readFromFile mc where
     readFromFile = withMVar mh $ flip getRawBlock pos
 
@@ -220,12 +225,13 @@ putRawBlock fl a (FFH mh wb _) = do
         else writeIORef wb wb''
     return p
 
-putBlock :: (Typeable f, Binary (f (Ptr f))) => (f (Ptr f)) -> FFH ->
-    IO (Ptr f)
-putBlock a h@(FFH _ _ mc) = putRawBlock False a h >>= cacheBlock . Ptr where
-    cacheBlock p = do
-        withCache_ mc (cacheInsert p a)
-        return p
+putBlock :: Fixable f => f (Ptr f) -> FFH -> IO (Ptr f)
+putBlock a h@(FFH _ _ mc) 
+    | null a = return (Ptr 0)
+    | otherwise = putRawBlock False a h >>= cacheBlock . Ptr where
+        cacheBlock p = do
+            withCache_ mc (cacheInsert p a)
+            return p
 
 {- | 
     'Stored' is a fixed-point combinator of 'f' in Transaction 's'.
@@ -245,8 +251,7 @@ instance Fixed (Stored s) where
 
 -- | Write the stored data to disk so that the on-disk representation 
 --   matches what is in memory.
-sync :: (Traversable f, Binary (f (Ptr f)), Typeable f) =>
-    FFH -> Stored s f -> IO (Ptr f)
+sync :: (Fixable f) => FFH -> Stored s f -> IO (Ptr f)
 sync h = commit where
     commit (Memory r) = do
         r' <- mapM commit r
@@ -271,7 +276,7 @@ instance Hashable (Ptr f) where
     hashWithSalt x (Ptr y) = hashWithSalt x y
 
 -- | A Constraint for data that can be used with a 'Ref'
-type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f)
+type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f, Null1 f)
 
 {- |
     'FixTraverse' is a class based on 'Traverse' but taking an argument of kind
@@ -362,8 +367,7 @@ subTransaction l st = Transaction $ RWS.RWST $ \ffh root -> do
 withHandle :: (FFH -> IO a) -> Transaction r s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
 
-readStoredLazy :: (Traversable f, Binary (f (Ptr f)), Typeable f) =>
-    FFH -> Ptr f -> IO (Stored s f)
+readStoredLazy :: Fixable f => FFH -> Ptr f -> IO (Stored s f)
 readStoredLazy h p = do
     f <- getBlock p h
     let fcons = Cached p

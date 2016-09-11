@@ -18,7 +18,6 @@
 module Data.FixFile.Set (Set
                          ,createSetFile
                          ,openSetFile
-                         ,empty
                          ,insertSet
                          ,insertSetT
                          ,deleteSet
@@ -48,9 +47,10 @@ data Set i a = Empty | Node a i a
 
 instance (Binary i, Binary a) => Binary (Set i a)
 
--- | An empty 'Set'.
-empty :: Fixed g => g (Set i)
-empty = inf Empty
+instance Null1 (Set i) where
+    empty1 = Empty
+    null1 Empty = True
+    null1 _ = False
 
 node :: Fixed g => g (Set i) -> i -> g (Set i) -> g (Set i)
 node l i r = inf $ Node l i r

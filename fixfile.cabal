@@ -46,6 +46,7 @@ library
                        ,Data.FixFile.Trie
                        ,Data.FixFile.Trie.Light
   other-modules:        Data.FixFile.Fixed
+                       ,Data.FixFile.Null
   ghc-options:          -Wall
 
 Test-Suite test-fixfile

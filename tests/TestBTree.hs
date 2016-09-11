@@ -3,8 +3,9 @@
 module TestBTree(testBTree) where
 
 import Data.Function
-import Data.List
+import Data.List hiding (null)
 import Data.Monoid
+import Prelude hiding (null)
 
 import Test.Tasty
 import Test.Tasty.QuickCheck
@@ -49,7 +50,7 @@ prop_BTreePartition xs k = testPart where
     empt = empty :: Fix (BTree 3 Int String)
     fullTree = foldr (uncurry insertBTree) empt xs
     (treeL, treeR) = partitionBTree k fullTree
-    emptT23 = T23.empty :: Fix (T23.Tree23 (T23.Map Int Int))
+    emptT23 = empty :: Fix (T23.Tree23 (T23.Map Int Int))
     counts = T23.toListMap $ foldr countItems emptT23 xs
     countItems (k', _) m = T23.alterMap k' (Just . maybe 1 (1+)) m
     correctTree (k', l) =

@@ -14,8 +14,6 @@
     used with 'FixFile'. It has two interfaces that are
 -}
 module Data.FixFile.Tree23 (Tree23
-                           ,empty
-                           ,null
                            ,size
                            ,depth
                            -- | * Set
@@ -79,6 +77,11 @@ data Tree23F k v a =
   deriving (Read, Show, Eq, Ord, Generic, Functor, Foldable, Traversable,
             Typeable)
 
+instance Null1 (Tree23F k v) where
+    empty1 = Empty
+    null1 Empty = True
+    null1 _ = False
+
 {- |
     'Fixed' @('Tree23' d)@ represents a Two-Three tree. The data type 'd' should
     have data families for it's key and value. These data families are not
@@ -94,10 +97,6 @@ data family TreeValue d
 instance (Binary a, Binary (TreeKey d), Binary (TreeValue d)) =>
     Binary (Tree23F (TreeKey d) (TreeValue d) a)
 
--- | An empty 'Fixed' 'Tree23'.
-empty :: Fixed g => g (Tree23 d)
-empty = inf Empty
-
 leaf :: Fixed g => TreeKey d -> TreeValue d -> g (Tree23 d)
 leaf k v = inf $ Leaf k v
 
@@ -109,12 +108,6 @@ three :: Fixed g => g (Tree23 d) -> TreeKey d -> g (Tree23 d) ->
     TreeKey d -> g (Tree23 d) -> g (Tree23 d)
 three l t1 m t2 r =
     inf $ Three l t1 m t2 r
-
--- | Predicate that returns true if there are no items in the 'Tree23'.
-null :: Fixed g => g (Tree23 d) -> Bool
-null = null' . outf where
-    null' Empty = True
-    null' _ = False
 
 -- | Number of entries in @('Tree23' g d)@.
 size :: Fixed g => g (Tree23 d) -> Int

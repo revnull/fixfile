@@ -13,7 +13,6 @@
     as a key-value store where the key is a 'ByteString' of arbitrary size.
 -}
 module Data.FixFile.Trie.Light (Trie
-                               ,empty
                                ,freeze
                                ,createTrieFile
                                ,openTrieFile
@@ -52,6 +51,11 @@ data Trie v a =
   | Mutable (Maybe v) (M.Map Word8 a)
   deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
+instance Null1 (Trie v) where
+    empty1 = Tail Nothing
+    null1 (Tail Nothing) = True
+    null1 _ = False
+
 instance (Binary v, Binary a) => Binary (Trie v a) where
     put (Tail a) = putWord8 1 >> put a
     put (String m b a) = putWord8 2 >> put m >> put b >> put a
@@ -67,10 +71,6 @@ instance (Binary v, Binary a) => Binary (Trie v a) where
 
 tail :: Fixed g => Maybe v -> g (Trie v)
 tail = inf . Tail where
-
--- | An empty 'Trie'
-empty :: Fixed g => g (Trie v)
-empty = tail Nothing
 
 string :: Fixed g => Maybe v -> BS.ByteString ->
     g (Trie v) -> g (Trie v)

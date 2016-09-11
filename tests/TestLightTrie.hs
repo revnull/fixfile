@@ -11,10 +11,11 @@ import Data.FixFile.Trie
 
 import qualified Data.ByteString.Lazy as BS
 import Data.Function
-import Data.List
+import Data.List hiding (null)
 import Data.Maybe
 import Data.Monoid
 import Control.Applicative hiding (empty)
+import Prelude hiding (null)
 
 instance Arbitrary BS.ByteString where
     arbitrary = BS.pack <$> arbitrary

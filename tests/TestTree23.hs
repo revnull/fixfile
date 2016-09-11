@@ -8,9 +8,10 @@ import Test.QuickCheck
 import Data.FixFile
 import Data.FixFile.Tree23 as Tree23
 
-import Data.List
+import Data.List hiding (null)
 import Data.Maybe
 import Data.Monoid
+import Prelude hiding (null)
 
 empty23 :: Fix (Tree23 d)
 empty23 = empty
@@ -128,7 +129,7 @@ prop_MapTraversable xs = testEvens evens' && testOdds odds' where
     evens' = traverseF' f evens
     odds' = traverseF' f odds
     testEvens Nothing = True
-    testEvens (Just ev) = Tree23.null ev
+    testEvens (Just ev) = null ev
     testOdds Nothing = False
     testOdds _ = True
 
