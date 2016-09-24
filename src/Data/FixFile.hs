@@ -368,10 +368,8 @@ withHandle :: (FFH -> IO a) -> Transaction r s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
 
 readStoredLazy :: Fixable f => FFH -> Ptr f -> IO (Stored s f)
-readStoredLazy h p = do
-    f <- getBlock p h
-    let fcons = Cached p
-    fcons <$> mapM (unsafeInterleaveIO . readStoredLazy h) f
+readStoredLazy h p = Cached p <$>
+    unsafeInterleaveIO (getBlock p h >>= mapM (readStoredLazy h))
 
 {- |
     The preferred way to modify the root object of a 'FixFile' is by using
