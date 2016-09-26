@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
-    DeriveDataTypeable, TypeFamilies #-}
+    DeriveDataTypeable, TypeFamilies, DefaultSignatures #-}
 
 {- |
     Module      :  Data.FixFile.Set
@@ -31,7 +31,7 @@ module Data.FixFile.Set (Set
 
 import Prelude hiding (lookup)
 
-import Data.Binary
+import Data.Serialize
 import Data.Dynamic
 import Data.Monoid
 import GHC.Generics
@@ -45,7 +45,7 @@ import Data.FixFile
 data Set i a = Empty | Node a i a
     deriving (Read, Show, Generic, Functor, Foldable, Traversable, Typeable)
 
-instance (Binary i, Binary a) => Binary (Set i a)
+instance (Serialize i, Serialize a) => Serialize (Set i a)
 
 instance Null1 (Set i) where
     empty1 = Empty
@@ -66,7 +66,7 @@ insertSet i s = newHead $ para phi s where
         GT -> ra >>= \r -> return $ node ln j r
 
 -- | 'Transaction' version of 'insertSet'.
-insertSetT :: (Ord i, Binary i) => i -> Transaction (Ref (Set i)) s ()
+insertSetT :: (Ord i, Serialize i) => i -> Transaction (Ref (Set i)) s ()
 insertSetT i = alterT (insertSet i)
 
 -- | Delete an item 'i' into a 'Fixed' recursive @'Set' i@.
@@ -81,7 +81,7 @@ deleteSet i s = newHead $ para phi s Nothing where
     phi (Node (ln, _) j (_, ra)) x = node ln j <$> ra x
 
 -- | 'Transaction' version of 'deleteSet'.
-deleteSetT :: (Ord i, Binary i) => i -> Transaction (Ref (Set i)) s ()
+deleteSetT :: (Ord i, Serialize i) => i -> Transaction (Ref (Set i)) s ()
 deleteSetT i = alterT (deleteSet i)
 
 -- | Predicate to lookup an item from a @'Set' i@.
@@ -94,16 +94,16 @@ lookupSet i = cata phi where
         GT -> ra
 
 -- | 'FTransaction' version of 'lookupSet'.
-lookupSetT :: (Ord i, Binary i) => i -> Transaction (Ref (Set i)) s Bool
+lookupSetT :: (Ord i, Serialize i) => i -> Transaction (Ref (Set i)) s Bool
 lookupSetT i = lookupT (lookupSet i)
 
 -- | Create a @'FixFile' ('Set' i)@.
-createSetFile :: (Binary i, Typeable i) =>
+createSetFile :: (Serialize i, Typeable i) =>
     FilePath -> IO (FixFile (Ref (Set i)))
 createSetFile fp = createFixFile (Ref empty) fp
 
 -- | Open a @'FixFile' ('Set' i)@.
-openSetFile :: (Binary i, Typeable i) =>
+openSetFile :: (Serialize i, Typeable i) =>
     FilePath -> IO (FixFile (Ref (Set i)))
 openSetFile = openFixFile
 
@@ -114,7 +114,7 @@ toListSet s = cata phi s [] where
     phi (Node la i ra) l = (la . (i:) . ra) l
 
 -- | 'Transaction' version of 'toListSet'.
-toListSetT :: Binary i => Transaction (Ref (Set i)) s [i]
+toListSetT :: Serialize i => Transaction (Ref (Set i)) s [i]
 toListSetT = lookupT toListSet
 
 instance FixedAlg (Set i) where

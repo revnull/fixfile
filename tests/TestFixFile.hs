@@ -1,10 +1,10 @@
-{-# LANGUAGE DeriveGeneric, FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric, DefaultSignatures, FlexibleInstances #-}
 
 module TestFixFile(testFixFile) where
 
-import Data.Binary
 import Data.FixFile
 import Data.FixFile.Tree23
+import Data.Serialize
 
 import Test.Tasty
 import Test.Tasty.QuickCheck
@@ -33,7 +33,7 @@ data TestRoot g =
     TR (Ref (Tree23 (Map Int String)) g) (Ref (Tree23 (Set String)) g)
     deriving (Generic)
 
-instance Binary (TestRoot Ptr)
+instance Serialize (TestRoot Ptr)
 
 instance FixTraverse TestRoot where
     traverseFix isoT (TR a b) =

@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
     DeriveDataTypeable, DataKinds, KindSignatures, TypeFamilies,
-    TupleSections #-}
+    TupleSections, DefaultSignatures #-}
 
 {- |
     Module      :  Data.FixFile.BTree
@@ -32,9 +32,10 @@ module Data.FixFile.BTree (BTree
                           ) where
 
 import Control.Monad.Writer
-import Data.Binary
+import Data.Serialize
 import Data.Dynamic
 import qualified Data.Vector as V
+import Data.Word
 import GHC.Generics
 import GHC.TypeLits
 
@@ -56,7 +57,7 @@ instance Null1 (BTree n k v) where
     null1 Empty = True
     null1 _ = False
 
-instance (Binary k, Binary v, Binary a) => Binary (BTree n k v a) where
+instance (Serialize k, Serialize v, Serialize a) => Serialize (BTree n k v a) where
     put Empty = putWord8 0x45
     put (Value v) = putWord8 0x56 >> put v
     put (Node d vec) = do
@@ -85,12 +86,12 @@ node d = inf . Node d
 
 -- | Create a 'FixFile' storing a @('BTree' k v)@.
 --   The initial value is 'empty'.
-createBTreeFile :: (Typeable n, Binary k, Typeable k, Binary v, Typeable v) =>
+createBTreeFile :: (Typeable n, Serialize k, Typeable k, Serialize v, Typeable v) =>
     FilePath -> IO (FixFile (Ref (BTree n k v)))
 createBTreeFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' storing a @('BTree' k v)@.
-openBTreeFile :: (Binary k, Typeable k, Binary v, Typeable v) =>
+openBTreeFile :: (Serialize k, Typeable k, Serialize v, Typeable v) =>
     FilePath -> IO (FixFile (Ref (BTree n k v)))
 openBTreeFile = openFixFile
 
@@ -164,7 +165,7 @@ insertBTree k v t = merge . para phi $ t where
                 newNode d (currSize + 1) (csf $ V.fromList [ls, rs])
 
 -- | 'Transaction' version of 'insertBTree'.
-insertBTreeT :: (KnownNat n, Ord k, Binary k, Binary v) => k -> v ->
+insertBTreeT :: (KnownNat n, Ord k, Serialize k, Serialize v) => k -> v ->
     Transaction (Ref (BTree n k v)) s ()
 insertBTreeT k v = alterT (insertBTree k v)
 
@@ -182,7 +183,7 @@ lookupBTree k = ($ []) . cata phi where
         in V.foldr (($) . snd) l eq
 
 -- | 'Transaction' version of 'lookupBTree'.
-lookupBTreeT :: (Ord k, Binary k, Binary v) => k ->
+lookupBTreeT :: (Ord k, Serialize k, Serialize v) => k ->
     Transaction (Ref (BTree n k v)) s [v]
 lookupBTreeT k = lookupT (lookupBTree k)
 
@@ -247,7 +248,7 @@ filterBTree k f t = deleted' . para phi $ t where
             _ -> Deleted mink $ node d vec'
 
 -- | 'Transaction' version of 'filterBTree'.
-filterBTreeT :: (Ord k, Binary k, Binary v) => k -> (v -> Bool) ->
+filterBTreeT :: (Ord k, Serialize k, Serialize v) => k -> (v -> Bool) ->
     Transaction (Ref (BTree n k v)) s ()
 filterBTreeT k f = alterT (filterBTree k f)
 
@@ -256,7 +257,7 @@ deleteBTree :: (Ord k, Fixed g) => k -> g (BTree n k v) -> g (BTree n k v)
 deleteBTree k = filterBTree k (const False)
 
 -- | 'Transaction' version of 'deleteBTree'.
-deleteBTreeT :: (Ord k, Binary k, Binary v) => k ->
+deleteBTreeT :: (Ord k, Serialize k, Serialize v) => k ->
     Transaction (Ref (BTree n k v)) s ()
 deleteBTreeT k = alterT (deleteBTree k)
 

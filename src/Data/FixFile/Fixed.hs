@@ -85,14 +85,14 @@ type AnaMAlg m f a = a -> m (f a)
     of a Functor.
 -}
 ana :: (Functor f, Fixed g) => AnaAlg f a -> a -> g f
-ana f = inf . fmap (ana f) . f
+ana f = af where af = inf . fmap af . f
 
 {-|
     'anaM' is a monadic anamorphism.
 -}
 anaM :: (Traversable f, Fixed g, Monad m) =>
     AnaMAlg m f a -> a -> m (g f)
-anaM f = fmap inf . (traverse (anaM f) =<<) . f
+anaM f = af where af = fmap inf . (traverse af =<<) . f
 
 {-|
     'CataAlg' is a catamorphism F-Algebra.
@@ -109,14 +109,14 @@ type CataMAlg m f a = f a -> m a
 -}
 cata :: (Functor f, Fixed g) => CataAlg f a -> g f -> a
 {-# INLINE[1] cata #-}
-cata f = f . fmap (cata f) . outf
+cata f = cf where cf = f . fmap cf . outf
 
 {-|
     'cataM' is a monadic catamorphism.
 -}
 cataM :: (Traversable f, Fixed g, Monad m) =>
     CataMAlg m f a -> g f -> m a
-cataM f = (>>= f) . (traverse (cataM f)) . outf
+cataM f = cf where cf = (>>= f) . traverse cf . outf
 
 {-|
     'ParaAlg' is a paramorphism F-Algebra.
@@ -132,17 +132,19 @@ type ParaMAlg m g f a = f (g f, a) -> m a
     'para' applies a 'ParaAlg' over a fixed point of a 'Functor'.
 -}
 para :: (Functor f, Fixed g) => ParaAlg g f a -> g f -> a
-para f = f . fmap para' . outf where
-    para' x = (x, para f x)
+para f = pf where
+    pf = f . fmap para' . outf
+    para' x = (x, pf x)
 
 {-|
     'paraM' is a monadic paramorphism.
 -}
 paraM :: (Traversable f, Fixed g, Monad m) =>
     ParaMAlg m g f a -> g f -> m a
-paraM f = (>>= f) . mapM para' . outf where
+paraM f = pf where
+    pf = (>>= f) . mapM para' . outf where
     para' x = do
-        x' <- paraM f x
+        x' <- pf x
         return (x, x')
 
 {-|

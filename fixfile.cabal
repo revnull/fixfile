@@ -24,7 +24,7 @@ description:
 
 library
   build-depends:        base >=4.8 && < 5
-                       ,binary
+                       ,cereal
                        ,bytestring
                        ,mtl
                        ,array
@@ -55,7 +55,7 @@ Test-Suite test-fixfile
   type:                 exitcode-stdio-1.0
   Build-Depends:        base >=4.5
                        ,fixfile
-                       ,binary >= 0.7
+                       ,cereal
                        ,bytestring >= 0.10.2
                        ,mtl
                        ,temporary

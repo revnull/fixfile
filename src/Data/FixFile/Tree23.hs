@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric, DeriveFunctor, DeriveFoldable, DeriveTraversable,
     KindSignatures, TypeFamilies, FlexibleInstances, FlexibleContexts,
-    DeriveDataTypeable #-}
+    DeriveDataTypeable, DefaultSignatures #-}
 
 {- |
     Module      :  Data.FixFile.Tree23
@@ -61,7 +61,7 @@ module Data.FixFile.Tree23 (Tree23
 import Prelude hiding (null)
 
 import Data.Dynamic
-import Data.Binary
+import Data.Serialize
 import Data.Maybe
 import Data.Monoid
 import GHC.Generics (Generic)
@@ -94,8 +94,8 @@ data family TreeKey d
 
 data family TreeValue d
 
-instance (Binary a, Binary (TreeKey d), Binary (TreeValue d)) =>
-    Binary (Tree23F (TreeKey d) (TreeValue d) a)
+instance (Serialize a, Serialize (TreeKey d), Serialize (TreeValue d)) =>
+    Serialize (Tree23F (TreeKey d) (TreeValue d) a)
 
 leaf :: Fixed g => TreeKey d -> TreeValue d -> g (Tree23 d)
 leaf k v = inf $ Leaf k v
@@ -134,9 +134,9 @@ newtype instance TreeKey (Set k) = SK k
 data instance TreeValue (Set k) = SV
     deriving (Read, Show, Eq, Ord, Generic, Typeable)
 
-instance Binary k => Binary (TreeKey (Set k))
+instance Serialize k => Serialize (TreeKey (Set k))
 
-instance Binary (TreeValue (Set k))
+instance Serialize (TreeValue (Set k))
 
 -- | Insert an item into a set.
 insertSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => k -> g f -> g f
@@ -179,42 +179,42 @@ fromListSet :: (Fixed g, Ord k, f ~ Tree23 (Set k)) => [k] -> g f
 fromListSet = Prelude.foldr insertSet empty
 
 -- | Create a 'FixFile' for storing a set of items.
-createSetFile :: (Binary k, Typeable k, f ~ Tree23 (Set k)) =>
+createSetFile :: (Serialize k, Typeable k, f ~ Tree23 (Set k)) =>
     FilePath -> IO (FixFile (Ref f))
 createSetFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' for storing a set of items.
-openSetFile :: (Binary k, Typeable k, f ~ Tree23 (Set k)) =>
+openSetFile :: (Serialize k, Typeable k, f ~ Tree23 (Set k)) =>
     FilePath ->IO (FixFile (Ref f))
 openSetFile fp = openFixFile fp
 
 -- | 'Transaction' version of 'insertSet'.
-insertSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+insertSetT :: (Serialize k, Ord k, f ~ Tree23 (Set k)) =>
     k -> Transaction (Ref f) s ()
 insertSetT k = alterT (insertSet k) 
 
 -- | 'FTransaction' version of 'lookupSet'.
-lookupSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+lookupSetT :: (Serialize k, Ord k, f ~ Tree23 (Set k)) =>
     k -> Transaction (Ref f) s Bool
 lookupSetT k = lookupT (lookupSet k)
 
 -- | 'FTransaction' version of 'deleteSet'.
-deleteSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+deleteSetT :: (Serialize k, Ord k, f ~ Tree23 (Set k)) =>
     k -> Transaction (Ref f) s ()
 deleteSetT k = alterT (deleteSet k)
 
 -- | 'Transaction' version of 'partitionSet'.
-partitionSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) => k ->
+partitionSetT :: (Serialize k, Ord k, f ~ Tree23 (Set k)) => k ->
     Transaction (Ref f) s (Stored s f, Stored s f)
 partitionSetT k = lookupT (partitionSet k)
 
 -- | 'FTransaction' version of 'minSet'.
-minSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+minSetT :: (Serialize k, Ord k, f ~ Tree23 (Set k)) =>
     Transaction (Ref f) s (Maybe k)
 minSetT = lookupT minSet
 
 -- | 'FTransaction' version of 'minSet'.
-maxSetT :: (Binary k, Ord k, f ~ Tree23 (Set k)) =>
+maxSetT :: (Serialize k, Ord k, f ~ Tree23 (Set k)) =>
     Transaction (Ref f) s (Maybe k)
 maxSetT = lookupT maxSet
 
@@ -237,9 +237,9 @@ newtype instance TreeKey (Map k v) = MK k
 newtype instance TreeValue (Map k v) = MV { fromMV :: v }
     deriving (Read, Show, Eq, Ord, Generic, Typeable)
 
-instance Binary k => Binary (TreeKey (Map k v))
+instance Serialize k => Serialize (TreeKey (Map k v))
 
-instance Binary v => Binary (TreeValue (Map k v))
+instance Serialize v => Serialize (TreeValue (Map k v))
 
 -- | Insert value 'v' into a map for key 'k'. Any existing value is replaced.
 insertMap :: (Fixed g, Ord k, f ~ Tree23 (Map k v)) => k -> v -> g f -> g f
@@ -299,49 +299,49 @@ maxMap t = do
     return (k, v)
 
 -- | Create a 'FixFile' of a Map.
-createMapFile :: (Binary k, Typeable k, Binary v, Typeable v,
+createMapFile :: (Serialize k, Typeable k, Serialize v, Typeable v,
         f ~ Tree23 (Map k v)) =>
     FilePath -> IO (FixFile (Ref f))
 createMapFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' of a Map.
-openMapFile :: (Binary k, Typeable k, Binary v, Typeable v,
+openMapFile :: (Serialize k, Typeable k, Serialize v, Typeable v,
         f ~ Tree23 (Map k v)) =>
     FilePath -> IO (FixFile (Ref f))
 openMapFile fp = openFixFile fp
 
 -- | 'Transaction' version of 'insertMap'.
-insertMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+insertMapT :: (Serialize k, Serialize v, Ord k, f ~ Tree23 (Map k v)) =>
     k -> v -> Transaction (Ref f) s ()
 insertMapT k v = alterT (insertMap k v) 
 
 -- | 'Transaction' version of 'lookupMap'.
-lookupMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+lookupMapT :: (Serialize k, Serialize v, Ord k, f ~ Tree23 (Map k v)) =>
     k -> Transaction (Ref f) s (Maybe v)
 lookupMapT k = lookupT (lookupMap k)
 
 -- | 'Transaction' version of 'deleteMap'.
-deleteMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+deleteMapT :: (Serialize k, Serialize v, Ord k, f ~ Tree23 (Map k v)) =>
     k -> Transaction (Ref f) s ()
 deleteMapT k = alterT (deleteMap k)
 
 -- | 'Transaction' version of 'partitionMap'.
-partitionMapT :: (Binary k, Ord k, Binary v, f ~ Tree23 (Map k v)) =>
+partitionMapT :: (Serialize k, Ord k, Serialize v, f ~ Tree23 (Map k v)) =>
     k -> Transaction (Ref f) s (Stored s f, Stored s f)
 partitionMapT k = lookupT (partitionMap k)
 
 -- | 'FTransaction' version of 'alterMap'.
-alterMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+alterMapT :: (Serialize k, Serialize v, Ord k, f ~ Tree23 (Map k v)) =>
     k -> (Maybe v -> Maybe v) -> Transaction (Ref f) s ()
 alterMapT k f = alterT (alterMap k f)
 
 -- | 'FTransaction' version of 'minMap'.
-minMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+minMapT :: (Serialize k, Serialize v, Ord k, f ~ Tree23 (Map k v)) =>
     Transaction (Ref f) s (Maybe (k, v))
 minMapT = lookupT minMap
 
 -- | 'FTransaction' version of 'minMap'.
-maxMapT :: (Binary k, Binary v, Ord k, f ~ Tree23 (Map k v)) =>
+maxMapT :: (Serialize k, Serialize v, Ord k, f ~ Tree23 (Map k v)) =>
     Transaction (Ref f) s (Maybe (k, v))
 maxMapT = lookupT maxMap
 

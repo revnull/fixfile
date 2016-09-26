@@ -1,7 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables, RankNTypes, KindSignatures,
     MultiParamTypeClasses, FlexibleInstances, FlexibleContexts,
     FunctionalDependencies, TypeFamilies, UndecidableInstances,
-    DeriveDataTypeable, DeriveGeneric, ConstraintKinds #-}
+    DeriveDataTypeable, DeriveGeneric, ConstraintKinds,
+    DefaultSignatures #-}
 
 {- |
     
@@ -20,7 +21,7 @@
     Transactions are used to ensure safety of the unsafe IO.
 
     The data structures used by a 'FixFile' should not be recursive directly,
-    but should have instances of 'Typeable', 'Traversable', and 'Binary' and
+    but should have instances of 'Typeable', 'Traversable', and 'Serialize' and
     should be structured such that the fixed point of the data type is
     recursive.
 
@@ -99,9 +100,8 @@ import Control.Exception
 import Control.Lens hiding (iso, para)
 import Control.Monad.Except hiding (mapM_)
 import qualified Control.Monad.RWS as RWS hiding (mapM_)
-import Data.Binary
+import Data.Serialize
 import Data.ByteString as BS hiding (null, empty)
-import Data.ByteString.Lazy as BSL hiding (null, empty)
 import Data.Dynamic
 import Data.Hashable
 import Data.HashTable.IO hiding (mapM_)
@@ -109,6 +109,7 @@ import Data.IORef
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
+import Data.Word
 import GHC.Generics
 import System.FilePath
 import System.Directory
@@ -183,50 +184,58 @@ initWB h = do
     p <- fromIntegral <$> hTell h
     return $ WB id p p
 
-writeWB :: Binary a => a -> WriteBuffer -> (WriteBuffer, Pos, Bool)
-writeWB a (WB bsf st end) = sbs `seq` wb where
+writeWB :: Serialize a => a -> WriteBuffer -> (WriteBuffer, Pos, Bool)
+writeWB a (WB bsf st end) = wb where
     wb = (WB bsf' st end', end, end' - st > bufferFlushSize)
     enc = encode a
-    len = fromIntegral $ BSL.length enc
+    len = fromIntegral $ BS.length enc
     len' = encode (len :: Word32)
-    sbs = BSL.toStrict (len' <> enc)
     end' = end + 4 + fromIntegral len
-    bsf' = bsf . (sbs:)
+    bsf' = bsf . (len':) . (enc:)
 
-flushBuffer :: WriteBuffer -> Handle -> IO WriteBuffer
-flushBuffer (WB bsf st en) h = do
-    hSeek h SeekFromEnd 0
-    p <- fromIntegral <$> hTell h
-    when (p /= st) $ fail "WriteBuffer position failure."
-    mapM_ (BS.hPut h) (bsf [])
+flushBuffer :: WriteBuffer -> MVar Handle -> IO WriteBuffer
+flushBuffer (WB bsf st en) mh = do
+    let bs = BS.concat (bsf [])
+    seq bs $ withMVar mh $ \h -> do
+        hSeek h SeekFromEnd 0
+        p <- fromIntegral <$> hTell h
+        when (p /= st) $ fail "WriteBuffer position failure."
+        BS.hPut h (BS.concat $ bsf [])
     return (WB id en en)
 
 -- FFH is a FixFile Handle. This is an internal data structure.
 data FFH = FFH (MVar Handle) (IORef WriteBuffer) (MVar Caches)
 
-getRawBlock :: Binary a => Handle -> Pos -> IO a
+getRawBlock :: Serialize a => Handle -> Pos -> IO a
 getRawBlock h p = do
     hSeek h AbsoluteSeek (fromIntegral p)
-    (sb :: Word32) <- decode <$> (BSL.hGet h 4)
-    decode <$> BSL.hGet h (fromIntegral sb)
+    Right (sb :: Word32) <- decode <$> (BS.hGet h 4)
+    Right a <- decode <$> BS.hGet h (fromIntegral sb)
+    return a
 
-getBlock :: Fixable f => Ptr f -> FFH -> IO (f (Ptr f))
-getBlock p@(Ptr pos) (FFH mh _ mc) = getCachedOrStored p readFromFile mc where
+getBlock :: Fixable f => FFH -> Ptr f -> IO (f (Ptr f))
+getBlock (FFH mh _ mc) p@(Ptr pos) = getCachedOrStored p readFromFile mc where
     readFromFile = withMVar mh $ flip getRawBlock pos
 
-putRawBlock :: Binary a => Bool -> a -> FFH -> IO Pos
+-- Bypassing the cache
+getBlock' :: Fixable f => FFH -> Ptr f -> IO (f (Ptr f))
+getBlock' _ (Ptr 0) = return empty1
+getBlock' (FFH mh _ _) (Ptr pos) = readFromFile where
+    readFromFile = withMVar mh $ flip getRawBlock pos
+
+putRawBlock :: Serialize a => Bool -> a -> FFH -> IO Pos
 putRawBlock fl a (FFH mh wb _) = do
     wb' <- readIORef wb
     let (wb'', p, fl') = writeWB a wb'
     if (fl' || fl)
         then do
-            wb''' <- withMVar mh (flushBuffer wb'')
+            wb''' <- flushBuffer wb'' mh
             writeIORef wb wb'''
         else writeIORef wb wb''
     return p
 
-putBlock :: Fixable f => f (Ptr f) -> FFH -> IO (Ptr f)
-putBlock a h@(FFH _ _ mc) 
+putBlock :: Fixable f => FFH -> f (Ptr f) -> IO (Ptr f)
+putBlock h@(FFH _ _ mc) a
     | null a = return (Ptr 0)
     | otherwise = putRawBlock False a h >>= cacheBlock . Ptr where
         cacheBlock p = do
@@ -253,9 +262,10 @@ instance Fixed (Stored s) where
 --   matches what is in memory.
 sync :: (Fixable f) => FFH -> Stored s f -> IO (Ptr f)
 sync h = commit where
+    pb = putBlock h
     commit (Memory r) = do
         r' <- mapM commit r
-        putBlock r' h
+        pb r'
     commit (Cached p _) = return p
 
 {- |
@@ -270,13 +280,13 @@ sync h = commit where
 newtype Ptr (f :: * -> *) = Ptr Pos
     deriving (Generic, Eq, Ord, Read, Show)
 
-instance Binary (Ptr f)
+instance Serialize (Ptr f)
 
 instance Hashable (Ptr f) where
     hashWithSalt x (Ptr y) = hashWithSalt x y
 
 -- | A Constraint for data that can be used with a 'Ref'
-type Fixable f = (Traversable f, Binary (f (Ptr f)), Typeable f, Null1 f)
+type Fixable f = (Traversable f, Serialize (f (Ptr f)), Typeable f, Null1 f)
 
 {- |
     'FixTraverse' is a class based on 'Traverse' but taking an argument of kind
@@ -291,11 +301,11 @@ class FixTraverse (t :: ((* -> *) -> *) -> *) where
 
 {- | 
     A 'Root' is a datastructure that is an instance of 'FixTraverse' and
-    'Binary'. This acts as a sort of "header" for the file where the 'Root'
+    'Serialize'. This acts as a sort of "header" for the file where the 'Root'
     may have several 'Ref's under it to different 'Functors'.
 -}
 
-type Root r = (FixTraverse r, Binary (r Ptr))
+type Root r = (FixTraverse r, Serialize (r Ptr))
 
 readRoot :: Root r => r Ptr -> Transaction r' s (r (Stored s))
 readRoot = traverseFix readPtr where
@@ -317,7 +327,7 @@ rootIso = runIdentity . traverseFix (Identity . iso)
 newtype Ref (f :: * -> *) (g :: (* -> *) -> *) = Ref { deRef :: g f }
     deriving (Generic)
 
-instance Binary (Ref f Ptr)
+instance Serialize (Ref f Ptr)
 
 instance Fixable f => FixTraverse (Ref f) where
     traverseFix isoT (Ref a) = Ref <$> isoT a
@@ -368,8 +378,9 @@ withHandle :: (FFH -> IO a) -> Transaction r s a
 withHandle f = Transaction $ RWS.ask >>= liftIO . f
 
 readStoredLazy :: Fixable f => FFH -> Ptr f -> IO (Stored s f)
-readStoredLazy h p = Cached p <$>
-    unsafeInterleaveIO (getBlock p h >>= mapM (readStoredLazy h))
+readStoredLazy h = anaMP where 
+    gb = getBlock h
+    anaMP p = Cached p <$> unsafeInterleaveIO (gb p >>= mapM anaMP)
 
 {- |
     The preferred way to modify the root object of a 'FixFile' is by using
@@ -377,7 +388,7 @@ readStoredLazy h p = Cached p <$>
     @'Stored' 's' 'f'@ and returns the new desired head of the
     same type.
 -}
-alterT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f (Ptr f))) =>
+alterT :: (tr ~ Transaction (Ref f) s, Traversable f, Serialize (f (Ptr f))) =>
     (Stored s f -> Stored s f) -> tr ()
 alterT f = ref %= f
 
@@ -385,7 +396,7 @@ alterT f = ref %= f
     The preferred way to read from a 'FixFile' is to use 'lookupT'. It
     applies a function that takes a @'Stored' s f@ and returns a value.
 -}
-lookupT :: (tr ~ Transaction (Ref f) s, Traversable f, Binary (f (Ptr f))) =>
+lookupT :: (tr ~ Transaction (Ref f) s, Traversable f, Serialize (f (Ptr f))) =>
     (Stored s f -> a) -> tr a
 lookupT f = f <$> use ref
 
@@ -415,14 +426,15 @@ withWriteLock ff f = do
 readHeader :: FFH -> IO (Pos)
 readHeader (FFH mh _ _) = withMVar mh $ \h -> do
     hSeek h AbsoluteSeek 0
-    decode <$> BSL.hGet h 8
+    Right p <- decode <$> BS.hGet h 8
+    return p
 
 updateHeader :: Pos -> Transaction r s ()
 updateHeader p = do
     withHandle $ \(FFH mh _ _) -> 
         withMVar mh $ \h -> do
             hSeek h AbsoluteSeek 0
-            BSL.hPut h (encode p)
+            BS.hPut h (encode p)
             hFlush h
 
 {- |
@@ -441,7 +453,7 @@ createFixFile initial path =
 createFixFileHandle :: Root r =>
     r Fix -> FilePath -> Handle -> IO (FixFile r)
 createFixFileHandle initial path h = do
-    BSL.hPut h (encode (0 :: Pos))
+    BS.hPut h (encode (0 :: Pos))
     wb <- initWB h
     ffh <- FFH <$> newMVar h <*> newIORef wb <*> newMVar M.empty
     let t = runRT $ do
@@ -456,7 +468,7 @@ createFixFileHandle initial path h = do
 {- |
     Open a 'FixFile' from the file described by 'FilePath'.
 -}
-openFixFile :: Binary (r Ptr) => FilePath -> IO (FixFile r)
+openFixFile :: Serialize (r Ptr) => FilePath -> IO (FixFile r)
 openFixFile path =
     openBinaryFile path ReadWriteMode >>= openFixFileHandle path
 
@@ -464,7 +476,7 @@ openFixFile path =
     Open a 'FixFile' from the file described by 'FilePath' and using the
     'Handle' to the file.
 -}
-openFixFileHandle :: Binary (r Ptr) => FilePath -> Handle ->
+openFixFileHandle :: Serialize (r Ptr) => FilePath -> Handle ->
     IO (FixFile r)
 openFixFileHandle path h = do
     wb <- initWB h
@@ -575,7 +587,7 @@ cloneH (FixFile _ mv _) dh = runClone where
     runClone = do
         mv'@(ffh, root) <- takeMVar mv
 
-        BSL.hPut dh (encode (Ptr 0))
+        BS.hPut dh (encode (Ptr 0))
 
         wb <- initWB dh
         wb' <- newIORef wb
@@ -586,12 +598,12 @@ cloneH (FixFile _ mv _) dh = runClone where
         r' <- putRawBlock True root' dffh 
 
         hSeek dh AbsoluteSeek 0
-        BSL.hPut dh (encode r')
+        BS.hPut dh (encode r')
 
         putMVar mv mv'
 
     copyPtr ffh h = hyloM
-        (flip getBlock ffh)
+        (getBlock' ffh)
         ((Ptr <$>) . flip (putRawBlock False) h)
 
 {- |

@@ -31,12 +31,13 @@ import Prelude hiding (tail)
 import Control.Applicative hiding (empty)
 import Control.Monad
 import Data.Array
-import Data.Binary
 import qualified Data.ByteString.Lazy as BS
 import Data.Dynamic
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
+import Data.Serialize
+import Data.Word
 import GHC.Generics
 
 import Data.FixFile
@@ -56,7 +57,7 @@ instance Null1 (Trie v) where
     null1 (Tail Nothing) = True
     null1 _ = False
 
-instance (Binary v, Binary a) => Binary (Trie v a) where
+instance (Serialize v, Serialize a) => Serialize (Trie v a) where
     put (Tail a) = putWord8 1 >> put a
     put (String m b a) = putWord8 2 >> put m >> put b >> put a
     put (Small m l) = putWord8 3 >> put m >> put l
@@ -118,12 +119,12 @@ thaw (Small a b) = Mutable a $ M.fromList b
 thaw m = m
 
 -- | Create a 'FixFile' of @('Trie' v)@ data.
-createTrieFile :: (Binary v, Typeable v) =>
+createTrieFile :: (Serialize v, Typeable v) =>
     FilePath -> IO (FixFile (Ref (Trie v)))
 createTrieFile fp = createFixFile (Ref empty) fp
 
 -- | Open a 'FixFile' of @('Trie' v)@ data.
-openTrieFile :: (Binary v, Typeable v) =>
+openTrieFile :: (Serialize v, Typeable v) =>
     FilePath -> IO (FixFile (Ref (Trie v)))
 openTrieFile = openFixFile
 
@@ -150,7 +151,7 @@ lookupTrie a b = cata phi b a where
         t r
 
 -- | 'Transaction' version of 'lookupTrie'.
-lookupTrieT :: Binary v =>
+lookupTrieT :: Serialize v =>
     BS.ByteString -> Transaction (Ref (Trie v)) s (Maybe v)
 lookupTrieT k = lookupT (lookupTrie k)
 
@@ -198,7 +199,7 @@ insertTrie a b c = para phi c a where
             Just (_, ta) -> M.insert kh (ta kt) $ fmap fst m
 
 -- | 'Transaction' version of 'insertTrie'.
-insertTrieT :: Binary v =>
+insertTrieT :: Serialize v =>
     BS.ByteString -> v -> Transaction (Ref (Trie v)) s ()
 insertTrieT k v = alterT (insertTrie k v)
  
@@ -267,7 +268,7 @@ deleteTrie a b = newHead $ para phi b a where
                 _ -> NoDelete
 
 -- | 'Transaction' version of 'deleteTrie'.
-deleteTrieT :: Binary v =>
+deleteTrieT :: Serialize v =>
     BS.ByteString -> Transaction (Ref (Trie v)) s ()
 deleteTrieT k = alterT (deleteTrie k)
 
@@ -308,7 +309,7 @@ iterateTrie a b = cata phi b a BS.empty [] where
                 Just r -> r k'' (BS.snoc k' i)
 
 -- | 'Transaction' version of 'iterateTrie'.
-iterateTrieT :: Binary v => BS.ByteString ->
+iterateTrieT :: Serialize v => BS.ByteString ->
     Transaction (Ref (Trie v)) s [(BS.ByteString, v)]
 iterateTrieT k = lookupT (iterateTrie k)
 
