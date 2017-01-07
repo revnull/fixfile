@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                   fixfile
-version:                0.6.0.0
+version:                0.7.0.0
 synopsis:               File-backed recursive data structures.
 homepage:               https://github.com/revnull/fixfile
 license:                LGPL-3
@@ -47,6 +47,7 @@ library
                        ,Data.FixFile.Trie.Light
   other-modules:        Data.FixFile.Fixed
                        ,Data.FixFile.Null
+                       ,Data.FixFile.Trie.Shared
   ghc-options:          -Wall
 
 Test-Suite test-fixfile

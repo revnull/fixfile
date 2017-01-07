@@ -7,7 +7,7 @@ import Test.Tasty.QuickCheck
 import Test.QuickCheck
 
 import Data.FixFile
-import Data.FixFile.Trie
+import Data.FixFile.Trie.Light
 
 import qualified Data.ByteString.Lazy as BS
 import Data.Function
@@ -28,6 +28,13 @@ prop_TrieInsert xs = allIns where
     empt = empty :: Fix (Trie Int)
     fullSet = foldr (uncurry insertTrie) empt xs
     allIns = all (isJust . flip lookupTrie fullSet) $ fmap fst xs
+
+prop_TrieLookupNegative :: [BS.ByteString] -> [BS.ByteString] -> Bool
+prop_TrieLookupNegative xs negs = allIns where
+    empt = empty :: Fix (Trie Int)
+    fullSet = foldr (flip insertTrie 0) empt xs
+    negs' = filter (\x -> not (any (== x) xs)) negs
+    allIns = all (isNothing . flip lookupTrie fullSet) negs'
 
 prop_TrieFreeze :: [(BS.ByteString, Int)] -> Bool
 prop_TrieFreeze xs = allIns where
@@ -119,6 +126,7 @@ prop_TrieTraversable xs = testAll where
 testLightTrie = testGroup "Light Trie"
     [
         testProperty "Light Trie Insert" prop_TrieInsert
+       ,testProperty "Light Trie Lookup Negative" prop_TrieLookupNegative
        ,testProperty "Light Trie Freeze" prop_TrieFreeze
        ,testProperty "Light Trie Thaw" prop_TrieThaw
        ,testProperty "Light Trie Delete" prop_TrieDelete

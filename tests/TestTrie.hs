@@ -29,6 +29,13 @@ prop_TrieInsert xs = allIns where
     fullSet = foldr (uncurry insertTrie) empt xs
     allIns = all (isJust . flip lookupTrie fullSet) $ fmap fst xs
 
+prop_TrieLookupNegative :: [BS.ByteString] -> [BS.ByteString] -> Bool
+prop_TrieLookupNegative xs negs = allIns where
+    empt = empty :: Fix (Trie Int)
+    fullSet = foldr (flip insertTrie 0) empt xs
+    negs' = filter (\x -> not (any (== x) xs)) negs
+    allIns = all (isNothing . flip lookupTrie fullSet) negs'
+
 prop_TrieFreeze :: [(BS.ByteString, Int)] -> Bool
 prop_TrieFreeze xs = allIns where
     empt = empty :: Fix (Trie Int)
@@ -119,6 +126,7 @@ prop_TrieTraversable xs = testAll where
 testTrie = testGroup "Trie"
     [
         testProperty "Trie Insert" prop_TrieInsert
+       ,testProperty "Trie Lookup Negative" prop_TrieLookupNegative
        ,testProperty "Trie Freeze" prop_TrieFreeze
        ,testProperty "Trie Thaw" prop_TrieThaw
        ,testProperty "Trie Delete" prop_TrieDelete

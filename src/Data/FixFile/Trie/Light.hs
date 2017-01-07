@@ -13,11 +13,14 @@
     as a key-value store where the key is a 'ByteString' of arbitrary size.
 -}
 module Data.FixFile.Trie.Light (Trie
+                               ,value
                                ,freeze
                                ,createTrieFile
                                ,openTrieFile
                                ,lookupTrie
                                ,lookupTrieT
+                               ,descendTrie
+                               ,descendTrieT
                                ,insertTrie
                                ,insertTrieT
                                ,deleteTrie
@@ -41,6 +44,7 @@ import Data.Word
 import GHC.Generics
 
 import Data.FixFile
+import Data.FixFile.Trie.Shared
 
 -- | 'Fixed' @('Trie' v)@ is a trie mapping lazy 'ByteString's to values of
 --   type v.
@@ -91,8 +95,13 @@ big v l = inf $ Big v l
 mut :: Fixed g => Maybe v -> M.Map Word8 (g (Trie v)) -> g (Trie v)
 mut v l = inf $ Mutable v l
 
-bigThreshold :: Int
-bigThreshold = 20
+value :: Fixed g => g (Trie v) -> Maybe v
+value = phi . outf where
+    phi (Tail v) = v
+    phi (String v _ _) = v
+    phi (Small v _) = v
+    phi (Big v _) = v
+    phi (Mutable v _) = v
 
 -- | 'freeze' takes a 'Trie' that has been mutated and creates a copy of it
 -- that allows for faster lookups. This happens automatically for 'Trie's that
@@ -103,11 +112,14 @@ freeze = cata (inf . freeze') where
 
 freeze' :: Trie v a -> Trie v a
 freeze' (Mutable a b) = if M.size b > bigThreshold
-    then Big a $ array (minBound, maxBound) $ do
-        i <- [minBound..maxBound]
-        case M.lookup i b of
-            Nothing -> return (i, Nothing)
-            Just t -> return (i, Just t)
+    then 
+        let Just ((minb,_),_) = M.minViewWithKey b
+            Just ((maxb,_),_) = M.maxViewWithKey b
+        in Big a $ array (minb, maxb) $ do
+            i <- [minb..maxb]
+            case M.lookup i b of
+                Nothing -> return (i, Nothing)
+                Just t -> return (i, Just t)
     else Small a $ M.toList b
 freeze' m = m
 
@@ -130,40 +142,42 @@ openTrieFile = openFixFile
 
 -- | Lookup a possible value stored in a trie for a given 'ByteString' key.
 lookupTrie :: Fixed g => BS.ByteString -> g (Trie v) -> Maybe v
-lookupTrie a b = cata phi b a where
-    term v k = guard (BS.null k) >> v
-    phi (Tail v) k = term v k
-    phi (String v s t) k = term v k <|> do
-        let (_, lt, rt) = splitKey s k
-        guard (BS.null lt)
-        t rt
-    phi (Small v l) k = term v k <|> do
-        (c, r) <- BS.uncons k
-        t <- lookup c l
-        t r
-    phi (Big v l) k = term v k <|> do
-        (c, r) <- BS.uncons k
-        t <- l ! c
-        t r
-    phi (Mutable v l) k = term v k <|> do
-        (c, r) <- BS.uncons k
-        t <- M.lookup c l
-        t r
+lookupTrie a b = descendTrie a b >>= value
 
 -- | 'Transaction' version of 'lookupTrie'.
 lookupTrieT :: Serialize v =>
     BS.ByteString -> Transaction (Ref (Trie v)) s (Maybe v)
 lookupTrieT k = lookupT (lookupTrie k)
 
-splitKey :: BS.ByteString -> BS.ByteString ->
-    (BS.ByteString, BS.ByteString, BS.ByteString)
-splitKey x y = case (BS.uncons x, BS.uncons y) of
-    (Nothing, Nothing) -> (BS.empty, BS.empty, BS.empty)
-    (Just (xc, xs), Just (yc, ys)) -> if xc == yc
-        then let (shared, xt, yt) = splitKey xs ys
-            in (BS.cons xc shared, xt, yt)
-        else (BS.empty, x, y)
-    _ -> (BS.empty, x, y)
+-- | Lookup a possible value stored in a trie for a given 'ByteString' key.
+descendTrie :: Fixed g => BS.ByteString -> g (Trie v) -> Maybe (g (Trie v))
+descendTrie a b = para phi b b a where
+    term t k = guard (BS.null k) >> return t
+    phi t t' k = term t' k <|> phi' t k
+    phi' (Tail _) _ = Nothing
+    phi' (String _ s (t', t)) k = do
+        let (_, lt, rt) = splitKey s k
+        case (BS.null lt, BS.null rt) of
+            (True, _) -> t t' rt
+            (False, False) -> Nothing
+            _ -> return . inf $ (String Nothing lt t')
+    phi' (Small _ l) k = do
+        (c, r) <- BS.uncons k
+        (t', t) <- lookupAscending c l
+        t t' r
+    phi' (Big _ l) k = do
+        (c, r) <- BS.uncons k
+        guard (inRange (bounds l) c)
+        (t', t) <- l ! c
+        t t' r
+    phi' (Mutable _ l) k = do
+        (c, r) <- BS.uncons k
+        (t', t) <- M.lookup c l
+        t t' r
+
+descendTrieT :: Serialize v => BS.ByteString ->
+    Transaction (Ref (Trie v)) s (Maybe (Stored s (Trie v)))
+descendTrieT a = lookupT (descendTrie a)
 
 -- | Insert a value into a trie for the given 'ByteString' key.
 insertTrie :: Fixed g => BS.ByteString -> v -> g (Trie v) -> g (Trie v)
@@ -289,7 +303,7 @@ iterateTrie a b = cata phi b a BS.empty [] where
         mapKeys (xk, xv) = xv k (BS.snoc k' xk)
         ts' = case BS.uncons k of
             Nothing -> foldMap mapKeys ts
-            Just (i, k'') -> case lookup i ts of
+            Just (i, k'') -> case lookupAscending i ts of
                 Nothing -> mempty
                 Just xv -> xv k'' (BS.snoc k' i)
     phi (Big vm ts) k k' = kvlist k k' vm <> ts' where
@@ -297,7 +311,7 @@ iterateTrie a b = cata phi b a BS.empty [] where
         mapKeys (xk, Just xv) = xv k (BS.snoc k' xk)
         ts' = case BS.uncons k of
             Nothing -> foldMap mapKeys (assocs ts)
-            Just (i, k'') -> case ts ! i of
+            Just (i, k'') -> case guard (inRange (bounds ts) i) >> ts ! i of
                 Nothing -> mempty
                 Just r -> r k'' (BS.snoc k' i) 
     phi (Mutable vm ts) k k' = kvlist k k' vm <> ts' where
