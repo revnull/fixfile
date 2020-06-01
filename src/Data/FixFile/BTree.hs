@@ -34,6 +34,7 @@ module Data.FixFile.BTree (BTree
 import Control.Monad.Writer
 import Data.Serialize
 import Data.Dynamic
+import Data.Proxy
 import qualified Data.Vector as V
 import Data.Word
 import GHC.Generics

@@ -109,6 +109,7 @@ import Data.IORef
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid
+import Data.Typeable
 import Data.Word
 import GHC.Generics
 import System.FilePath

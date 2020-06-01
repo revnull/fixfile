@@ -36,6 +36,7 @@ module Data.FixFile.BTree.Light (BTree
 import Control.Monad.Writer
 import Data.Serialize
 import Data.Dynamic
+import Data.Proxy
 import Data.Word
 import qualified Data.Vector as V
 import GHC.Generics
